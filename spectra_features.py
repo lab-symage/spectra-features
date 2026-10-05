@@ -5,13 +5,14 @@ FDTD 濾光片穿透率：特徵擷取 + 視覺化檢查 + 400–1000 nm 覆蓋�
 
 主要函式
   make_synthetic   → 合成測試光譜（含 ground truth），可大量產生
-  load_csv / to_uniform_grid / save_dataset / load_dataset
+  from_array / load_csv / to_uniform_grid / save_dataset / load_dataset
   extract_batch    → summary、peaks、YN、TP（支援多核心平行 + 進度條）
   add_sampling_info→ 原始取樣密度檢查
-  evaluate         → PASS/FAIL 與失敗原因
+  evaluate         → PASS/FAIL 與失敗原因（含 peak_ranges 與峰形條件）
   select_coverage  → 貪婪挑選覆蓋 400–1000 nm 的組合
   recompute_arrays → 大量資料時只為子集合重算 YN/TP（省記憶體）
   synthetic_check  → 合成資料的偵測正確率
+  self_check       → 快速確認本檔所有功能完整（更新後建議先執行）
   plot_profile / plot_gallery / plot_overview / plot_selection
 
 ※ 平行處理（n_jobs != 1）在 Windows / macOS 或 Jupyter 中，請把本檔存成模組
@@ -25,6 +26,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from scipy.signal import find_peaks, peak_widths, peak_prominences, savgol_filter
+
+__version__ = "2026-10-05.r2"
 
 WL = np.arange(350, 1101, 1.0)
 
@@ -51,7 +54,7 @@ CFG = dict(
 )
 
 CRIT = dict(
-    max_sig_peaks=3,
+    max_sig_peaks=3,        # None → 不限制全域有效峰數
     max_fwhm=60.0,
     min_core=0.5,
     min_in_band=0.85,
@@ -66,7 +69,11 @@ CRIT = dict(
                             # 欄位：range=(lo, hi) 必填；min / max 可省略；
                             #       kind="sig"（有效峰，預設）| "all"（含 sidelobe，需傳入 peaks 表）；
                             #       name：失敗原因名稱（預設 "pk800-900"）
-                            # 若只想依範圍判定、不限制全域峰數，設 max_sig_peaks=None
+    # 以下峰形條件為選填（設定數值才檢查）：
+    #   max_shape_factor  ：有效峰 FW10/FWHM 上限（尾巴長度；Gaussian 1.82、Lorentzian 3.0）
+    #   max_flat_factor   ：有效峰 FW90/FWHM 上限（峰頂平坦度；Gaussian 0.39、flat-top ≈ 0.8）
+    #   max_gauss_nrmse   ：有效峰與 Gaussian 的偏差上限（Gaussian ≈ 0、Lorentzian ≈ 0.09）
+    #   min_main_area_frac：主峰面積佔比下限
 )
 
 
@@ -573,7 +580,8 @@ def extract_features(t_raw, wl=WL, cfg=CFG):
             fw10=w_lo[0][i] * dx, fw10_left=to_wl(w_lo[2][i]), fw10_right=to_wl(w_lo[3][i]),
             fw10_level=to_T(w_lo[1][i]),
             Q=wl[p] / max(fwhm, 1e-9),
-            shape_factor=w_lo[0][i] / max(w50[0][i], 1e-9),
+            shape_factor=w_lo[0][i] / max(w50[0][i], 1e-9),   # FW10/FWHM：尾巴長度（Gaussian 1.82、Lorentzian 3.0）
+            flat_factor=w_hi[0][i] / max(w50[0][i], 1e-9),    # FW90/FWHM：峰頂平坦度（Gaussian 0.39、flat-top ≈ 0.8）
             asymmetry=(hm_r - wl[p]) / max(wl[p] - hm_l, 1e-9),
             edge_l=(w_hi[2][i] - w_lo[2][i]) * dx,
             edge_r=(w_lo[3][i] - w_hi[3][i]) * dx,
@@ -643,6 +651,8 @@ def extract_features(t_raw, wl=WL, cfg=CFG):
         max_edge=float(sig[["edge_l", "edge_r"]].to_numpy().max()),
         max_ripple=sig.ripple.max(),
         main_shape_factor=main.shape_factor,
+        main_flat_factor=main.flat_factor,
+        max_flat_factor=sig.flat_factor.max(),
         main_gauss_nrmse=main.gauss_nrmse,
         max_gauss_nrmse=sig.gauss_nrmse.max(),
         n_hm_unresolved=int(pdf.loc[pdf.is_sig, "hm_unresolved"].sum()),
@@ -786,6 +796,15 @@ def count_peaks_in_range(summary, lo, hi, peaks=None, kind="sig"):
     return cnt.reindex(summary.index, fill_value=0).astype(int)
 
 
+# 選填的峰形條件：(結果欄名, summary 欄位, crit 鍵, 比較方向)
+_SHAPE_CRITERIA = [
+    ("shape", "max_shape_factor", "max_shape_factor", "<="),
+    ("flat", "max_flat_factor", "max_flat_factor", "<="),
+    ("gauss", "max_gauss_nrmse", "max_gauss_nrmse", "<="),
+    ("dominance", "main_area_frac", "min_main_area_frac", ">="),
+]
+
+
 def evaluate(summary, crit=CRIT, peaks=None):
     crit = {**CRIT, **crit}         # 舊版 crit 缺少的條件以目前預設值補齊
     s = summary
@@ -794,7 +813,9 @@ def evaluate(summary, crit=CRIT, peaks=None):
         return s[name] if name in s else pd.Series(np.nan, index=s.index)
 
     chk = pd.DataFrame({
-        "peaks": col("n_sig_peaks").between(1, crit["max_sig_peaks"]),
+        "peaks": (col("n_sig_peaks").between(1, crit["max_sig_peaks"])
+                  if crit.get("max_sig_peaks") is not None
+                  else pd.Series(True, index=s.index)),          # None → 不限制全域峰數
         "fwhm": col("max_fwhm_sig") <= crit["max_fwhm"],
         "core": col("core_frac") >= crit["min_core"],
         "in_band": col("in_band_frac") >= crit["min_in_band"],
@@ -804,8 +825,29 @@ def evaluate(summary, crit=CRIT, peaks=None):
         "shoulder": (col("n_shoulders") == 0) | bool(crit["allow_shoulders"]),
         "T_range": (col("n_T_gt1") == 0) & (col("n_T_neg") == 0),
     }, index=s.index).astype(bool)
-    if "min_raw_pts_fwhm" in s:
+
+    if "min_raw_pts_fwhm" in s:     # 有呼叫 add_sampling_info 時才檢查
         chk["sampling"] = (s["min_raw_pts_fwhm"] >= crit.get("min_raw_pts_fwhm", 5)).to_numpy()
+
+    # ---- 指定波長範圍內的峰數 ----
+    for r in crit.get("peak_ranges") or []:
+        lo, hi = r["range"]
+        cnt = count_peaks_in_range(s, lo, hi, peaks, r.get("kind", "sig"))
+        ok = pd.Series(True, index=s.index)
+        if r.get("min") is not None:
+            ok &= cnt >= r["min"]
+        if r.get("max") is not None:
+            ok &= cnt <= r["max"]
+        chk[r.get("name") or f"pk{lo:.0f}-{hi:.0f}"] = ok.to_numpy()
+
+    # ---- 峰形條件（crit 中有給值才檢查）----
+    for name, colname, key, op in _SHAPE_CRITERIA:
+        if crit.get(key) is not None:
+            if colname not in s:
+                raise KeyError(f"summary 缺少欄位 '{colname}'（可能是舊版的擷取結果），"
+                               f"無法檢查 {key}；請以目前版本重新執行 extract_batch / run_fdtd")
+            v = col(colname)
+            chk[name] = ((v <= crit[key]) if op == "<=" else (v >= crit[key])).to_numpy()
 
     names = list(chk.columns)
     valid = s["valid"].fillna(False).astype(bool).to_numpy()
@@ -964,7 +1006,7 @@ def plot_profile(k, summary, peaks, TP=None, T_raw=None, evals=None, wl=WL, cfg=
             ax.plot(q, np.interp(q, wl, t), "^", color=c, ms=4, mfc="none", zorder=5)
         lab = f"{r.peak_wl:.0f} nm\nFWHM {r.fwhm:.1f}\nA {100 * r.area_frac:.0f}%  Q {r.Q:.0f}"
         if not compact:
-            lab += f"\nedge {r.edge_l:.0f}/{r.edge_r:.0f}  SF {r.shape_factor:.2f}"
+            lab += f"\nedge {r.edge_l:.0f}/{r.edge_r:.0f}  SF {r.shape_factor:.2f}  FF {r.flat_factor:.2f}"
             if r.ripple > 0:
                 lab += f"\nripple {r.ripple:.2f}"
         ax.annotate(lab, (r.peak_wl, r.T_peak), xytext=(0, 6 + 28 * (ci % 2)),
@@ -1054,6 +1096,7 @@ def plot_overview(summary, evals, chosen=(), wl=WL, cfg=CFG, crit=CRIT,
                   max_rows=150, max_points=20000, seed=0):
     """左：主峰波長 vs 最大 FWHM（大量資料時隨機抽樣顯示）；右：候選的半高區段（紅 = 選中）"""
     import matplotlib.pyplot as plt
+    crit = {**CRIT, **crit}
     rng = np.random.default_rng(seed)
     n = len(summary)
     ok = evals["pass"].to_numpy()
@@ -1062,6 +1105,7 @@ def plot_overview(summary, evals, chosen=(), wl=WL, cfg=CFG, crit=CRIT,
     yv = summary["max_fwhm_sig"].to_numpy(float)
     ch = np.asarray(list(chosen), int)
     chs = set(ch.tolist())
+    vmax = crit.get("max_sig_peaks") or max(3, int(np.nanmax(summary["n_sig_peaks"].to_numpy(float))))
 
     show = np.zeros(n, bool)
     show[rng.choice(n, min(n, max_points), replace=False)] = True
@@ -1072,7 +1116,7 @@ def plot_overview(summary, evals, chosen=(), wl=WL, cfg=CFG, crit=CRIT,
     okp = ok & show
     a1.scatter(x[f], yv[f], marker="x", color="0.6", s=12, label="fail", rasterized=True)
     sc = a1.scatter(x[okp], yv[okp], c=summary["n_sig_peaks"].to_numpy(float)[okp], cmap="viridis",
-                    vmin=1, vmax=crit["max_sig_peaks"], s=24, edgecolors="k", linewidths=0.3,
+                    vmin=1, vmax=vmax, s=24, edgecolors="k", linewidths=0.3,
                     label="pass", rasterized=True)
     if len(ch):
         a1.scatter(x[ch], yv[ch], s=130, facecolors="none", edgecolors="red", linewidths=1.5,
@@ -1129,6 +1173,39 @@ def plot_selection(chosen, summary, TP, report, wl=WL, cfg=CFG):
 
 
 # ============================================================================
+# 自我檢查
+# ============================================================================
+def self_check(verbose=True):
+    """
+    以少量合成資料實際執行一次，確認欄位與判定條件都存在（約 1–2 秒）。
+    更新程式後建議先執行：self_check()  → 應顯示 OK
+    """
+    T, ids, _ = make_synthetic(n=200, seed=1, progress=False)
+    s, p, YN, TP = extract_batch(T, ids, n_jobs=1, progress=False)
+    missing = []
+    for c in ["gauss_nrmse", "shape_factor", "flat_factor", "hm_unresolved", "edge_l", "edge_r"]:
+        if c not in p:
+            missing.append(f"peaks.{c}")
+    for c in ["max_shape_factor", "max_flat_factor", "max_gauss_nrmse", "main_flat_factor",
+              "leak_excl", "rejection_db", "n_hm_unresolved"]:
+        if c not in s:
+            missing.append(f"summary.{c}")
+    crit = dict(CRIT, max_sig_peaks=None, peak_ranges=[dict(range=(400, 600), max=5)],
+                max_shape_factor=2.2, max_flat_factor=0.5, max_gauss_nrmse=0.05,
+                min_main_area_frac=0.5)
+    ev = evaluate(s, crit, p)
+    for c in ["pk400-600", "shape", "flat", "gauss", "dominance", "pass", "fail_reasons"]:
+        if c not in ev:
+            missing.append(f"evals.{c}")
+    log, rep, chosen = select_coverage(s, YN, TP, evaluate(s), min_abs_T=0.0,
+                                       quality=(1 - s["max_gauss_nrmse"] / 0.05).clip(0, 1))
+    ok = not missing
+    if verbose:
+        print(f"spectra_features {__version__}: " + ("OK" if ok else f"缺少 {missing}"))
+    return ok
+
+
+# ============================================================================
 # 測試流程（合成資料 / FDTD 資料）
 # ============================================================================
 def _print_stats(summary, ev):
@@ -1142,15 +1219,17 @@ def _print_stats(summary, ev):
               summary["n_sig_peaks"].fillna(0).astype(int).value_counts().sort_index())
     print("\n[主要失敗原因]\n", ev.loc[~ev["pass"], "fail_reasons"].value_counts().head(10))
     cols = [c for c in ["n_sig_peaks", "main_peak_wl", "max_fwhm_sig", "core_frac", "rejection_db",
-                        "in_band_frac", "T_peak", "max_ripple", "min_raw_pts_fwhm"] if c in summary]
+                        "in_band_frac", "T_peak", "max_ripple", "max_shape_factor",
+                        "max_flat_factor", "max_gauss_nrmse", "min_raw_pts_fwhm"] if c in summary]
     print("\n[特徵統計]\n", summary[cols].describe(percentiles=[0.05, 0.5, 0.95]).T.round(3))
 
 
-def run_synthetic(n=20000, seed=0, n_jobs=-1, chunk_size=1000, coverage_kw=None, plots=True):
+def run_synthetic(n=20000, seed=0, n_jobs=-1, chunk_size=1000, crit=CRIT, coverage_kw=None,
+                  plots=True):
     """合成資料測試：產生 → 擷取 → 與 ground truth 比對 → 覆蓋篩選 → 作圖"""
     T, ids, meta = make_synthetic(n=n, seed=seed)
     summary, peaks, YN, TP = extract_batch(T, ids, n_jobs=n_jobs, chunk_size=chunk_size)
-    ev = evaluate(summary)
+    ev = evaluate(summary, crit, peaks)
     _print_stats(summary, ev)
 
     chk = synthetic_check(summary, meta)
@@ -1170,7 +1249,7 @@ def run_synthetic(n=20000, seed=0, n_jobs=-1, chunk_size=1000, coverage_kw=None,
         ex = [int(np.flatnonzero(types == t)[0]) for t in pd.unique(types)]   # 每類型各一條
         plot_profile(ex[0], summary, peaks, TP, evals=ev)
         plot_gallery(ex, summary, peaks, TP, evals=ev)
-        plot_overview(summary, ev, chosen)
+        plot_overview(summary, ev, chosen, crit=crit)
         if chosen:
             plot_selection(chosen, summary, TP, rep)
     return dict(T=T, ids=ids, meta=meta, summary=summary, peaks=peaks, evals=ev,
@@ -1179,20 +1258,21 @@ def run_synthetic(n=20000, seed=0, n_jobs=-1, chunk_size=1000, coverage_kw=None,
 
 def run_fdtd(T_raw, wl_raw=None, ids=None, params=None, wl=WL, cfg=CFG, crit=CRIT,
              n_jobs=-1, chunk_size=2000, keep_arrays=None, coverage_kw=None, plots=True,
-             fail_pdf="fdtd_fail_check.pdf", max_pdf=400, seed=0):
+             fail_pdf="fdtd_fail_check.pdf", max_pdf=400, seed=0, quality=None):
     """
     FDTD 資料測試（輸入 numpy array）：整理格式 → 擷取 → 取樣檢查 → 判定 → 覆蓋篩選 → 作圖
       T_raw / wl_raw / ids：見 from_array
       params     : 設計參數 DataFrame（index 為 ids 字串），會列出被選中設計的參數
       keep_arrays: None → 20 萬條以下保留 YN/TP，以上改為只對 PASS 候選重算
       fail_pdf   : FAIL 光譜的檢查圖輸出路徑（最多 max_pdf 條，隨機抽樣）；None 不輸出
+      quality    : 覆蓋篩選的品質權重；"gauss" → 依 max_gauss_nrmse 自動計算
     """
     T, ids, wl_s = from_array(T_raw, wl_raw, ids, wl)
     n = len(T)
     if keep_arrays is None:
         keep_arrays = n <= 200_000
-    print(f"[FDTD] {n:,} 條光譜 | 格點 {wl[0]:.0f}–{wl[-1]:.0f} nm, {len(wl)} 點 | "
-          f"keep_arrays={keep_arrays}")
+    print(f"[FDTD] spectra_features {__version__} | {n:,} 條光譜 | "
+          f"格點 {wl[0]:.0f}–{wl[-1]:.0f} nm, {len(wl)} 點 | keep_arrays={keep_arrays}")
 
     summary, peaks, YN, TP = extract_batch(T, ids, wl=wl, cfg=cfg, n_jobs=n_jobs,
                                            chunk_size=chunk_size, keep_arrays=keep_arrays)
@@ -1201,17 +1281,21 @@ def run_fdtd(T_raw, wl_raw=None, ids=None, params=None, wl=WL, cfg=CFG, crit=CRI
     ev = evaluate(summary, crit, peaks)
     _print_stats(summary, ev)
 
+    if isinstance(quality, str) and quality == "gauss":
+        quality = (1 - summary["max_gauss_nrmse"] / 0.05).clip(0, 1)
+
     # ---- 覆蓋篩選 ----
     kw = dict(level=0.5, min_abs_T=0.2)
     kw.update(coverage_kw or {})
     if keep_arrays:
-        log, rep, chosen = select_coverage(summary, YN, TP, ev, wl=wl, band=cfg["band"], **kw)
+        log, rep, chosen = select_coverage(summary, YN, TP, ev, wl=wl, band=cfg["band"],
+                                           quality=quality, **kw)
         sel_summary, sel_TP, sel_chosen = summary, TP, chosen
     else:
         idx = np.flatnonzero(ev["pass"].to_numpy())
         YNs, TPs = recompute_arrays(T, idx, wl, cfg)
         log, rep, ch = select_coverage(summary.iloc[idx], YNs, TPs, ev.iloc[idx],
-                                       wl=wl, band=cfg["band"], **kw)
+                                       wl=wl, band=cfg["band"], quality=quality, **kw)
         chosen = [int(idx[c]) for c in ch]
         sel_summary, sel_TP, sel_chosen = summary.iloc[idx], TPs, ch
     print("\n[覆蓋篩選]\n", log)
@@ -1294,6 +1378,8 @@ if __name__ == "__main__":
     # plot_gallery(np.flatnonzero(~ev["pass"].to_numpy())[:400], summary, peaks,
     #              T_raw=T, evals=ev, pdf_path="check_fail.pdf")
 
+    self_check()                    # 確認程式完整（應顯示 OK）
+
     MODE = "synthetic"              # "synthetic" | "fdtd"
 
     if MODE == "synthetic":
@@ -1315,17 +1401,20 @@ if __name__ == "__main__":
         if params_fdtd is not None:
             params_fdtd.index = params_fdtd.index.astype(str)
 
+        crit = dict(CRIT)   # 依需求調整，例如：
+        # crit = dict(CRIT, max_sig_peaks=1, min_peak_T=0.08, min_rejection_db=10,
+        #             max_shape_factor=2.1, max_flat_factor=0.5)
         res = run_fdtd(
-            T_fdtd, wl_raw=wl_fdtd, ids=ids_fdtd, params=params_fdtd,
+            T_fdtd, wl_raw=wl_fdtd, ids=ids_fdtd, params=params_fdtd, crit=crit,
             n_jobs=-1, chunk_size=2000,
-            coverage_kw=dict(level=0.5, min_abs_T=0.2),
+            coverage_kw=dict(level=0.5, min_abs_T=0.05),
             fail_pdf="fdtd_fail_check.pdf", max_pdf=400,
         )
 
         # ---- 匯出 PASS profiles 到 PDF ----
         EXPORT_PASS_PDF = True
         PASS_PDF = "fdtd_pass.pdf"
-        PASS_MAX = None             # None = 全部；給整數則依主峰波長均勻抽樣到此數量
+        PASS_MAX = 400              # None = 全部；給整數則依主峰波長均勻抽樣到此數量
         SELECTED_ONLY = False       # True：只匯出覆蓋篩選選中的組合（res["chosen"]）
 
         if EXPORT_PASS_PDF:
