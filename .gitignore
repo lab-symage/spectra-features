@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.venv/
+venv/
+# 資料與輸出（避免上傳模擬資料與大檔）
+*.npy
+*.npz
+*.parquet
+*.csv
+*.pdf
