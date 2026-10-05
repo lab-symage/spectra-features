@@ -110,32 +110,32 @@ T_raw ─► from_array / to_uniform_grid ─► T (n_samples, 751)
 
 ### 4.1 平滑與基線
 
-$$
+```math
 T_s(\lambda) = \begin{cases} \mathrm{SG}(T_\text{raw};\ w, k) & \text{if } w \ge 3 \\ T_\text{raw} & \text{otherwise} \end{cases}
-$$
+```
 
-- SG 為 Savitzky–Golay 濾波，視窗 `sg_window = w`、階數 `sg_order = k`。預設 `w = 0`，即不平滑，因為 FDTD 沒有隨機雜訊。
+SG 為 Savitzky–Golay 濾波，視窗 `sg_window` $`= w`$、階數 `sg_order` $`= k`$。預設 $`w = 0`$，即不平滑，因為 FDTD 沒有隨機雜訊。
 
-$$
-b = \begin{cases} 0 & \texttt{baseline\_mode="none"}\ \text{（預設）} \\ \mathrm{percentile}(T_s, p) & \texttt{"percentile"} \\ \min T_s & \texttt{"min"} \end{cases}
-$$
+```math
+b = \begin{cases} 0 & \texttt{baseline\_mode = "none"} \text{ (default)} \\ \mathrm{percentile}(T_s, p) & \texttt{"percentile"} \\ \min T_s & \texttt{"min"} \end{cases}
+```
 
-$$
+```math
 y(\lambda) = \max\left(T_s(\lambda) - b,\ 0\right), \qquad y_\text{max} = \max_\lambda y(\lambda)
-$$
+```
 
-$$
-y_n(\lambda) = \frac{y(\lambda)}{y_\text{max}} \quad\text{（正規化，YN）}, \qquad T_p(\lambda) = y(\lambda) + b \quad\text{（處理後絕對穿透率，TP）}
-$$
+```math
+y_n(\lambda) = \frac{y(\lambda)}{y_\text{max}} \ \text{(YN)}, \qquad T_p(\lambda) = y(\lambda) + b \ \text{(TP)}
+```
 
-穿透率建議使用 `baseline_mode="none"`：背景漏光本身就是要評估的對象，扣掉會掩蓋問題。
+$`y_n`$ 為正規化光譜（YN），$`T_p`$ 為處理後的絕對穿透率（TP）。穿透率建議使用 `baseline_mode="none"`：背景漏光本身就是要評估的對象，扣掉會掩蓋問題。
 
 ### 4.2 FDTD 數值檢查
 
 | 特徵 | 定義 | 用途 |
 |---|---|---|
-| `n_T_gt1` | 原始 T 中 $T > 1.001$ 的點數 | 能量不守恆，通常是監視器位置或正規化設定有問題 |
-| `n_T_neg` | 原始 T 中 $T < -0.001$ 的點數 | 常見於模擬時間不足造成的振盪 |
+| `n_T_gt1` | 原始 T 中 $`T > 1.001`$ 的點數 | 能量不守恆，通常是監視器位置或正規化設定有問題 |
+| `n_T_neg` | 原始 T 中 $`T < -0.001`$ 的點數 | 常見於模擬時間不足造成的振盪 |
 
 ---
 
@@ -143,7 +143,7 @@ $$
 
 ### 5.1 候選峰
 
-以 `scipy.signal.find_peaks` 在 $y_n$ 上找局部極大，條件：
+以 `scipy.signal.find_peaks` 在 $`y_n`$ 上找局部極大，條件：
 
 - prominence ≥ `prom_frac`（預設 0.05）
 - 高度 ≥ `height_frac`（預設 0.03）
@@ -151,39 +151,39 @@ $$
 
 ### 5.2 prominence（局部背景）
 
-採用 scipy 的定義：從峰頂向左右延伸水平線，直到碰到更高的訊號或光譜邊界；在左右兩段範圍內各取最低點，以兩者中**較高**的作為參考高度 $B$（局部背景）。
+採用 scipy 的定義：從峰頂向左右延伸水平線，直到碰到更高的訊號或光譜邊界；在左右兩段範圍內各取最低點，以兩者中**較高**的作為參考高度 $`B`$（局部背景）。
 
-$$
+```math
 P = y_{n,p} - B
-$$
+```
 
 ### 5.3 ripple 合併
 
-依序檢查相鄰的候選峰 $q, p$，若兩峰之間的谷底滿足
+依序檢查相鄰的候選峰 $`q, p`$，若兩峰之間的谷底滿足
 
-$$
+```math
 \min_{q \le j \le p} y_n(j) \ \ge\ \texttt{merge\_frac} \times \max\left(y_{n,q},\ y_{n,p}\right)
-$$
+```
 
 就合併為同一個通帶，由群組中最高的峰代表（預設 `merge_frac = 0.6`）。被合併的子峰位置記錄在 `ripple_wls`。此步驟避免 flat-top 通帶上的 ripple 被誤判為多個峰。
 
 ### 5.4 valley 區段切分
 
-設合併後的代表峰依波長排序為 $p_1 < p_2 < \dots < p_m$，相鄰峰之間的谷底為
+設合併後的代表峰依波長排序為 $`p_1 < p_2 < \dots < p_m`$，相鄰峰之間的谷底為
 
-$$
+```math
 v_i = \arg\min_{p_i \le j \le p_{i+1}} y_n(j)
-$$
+```
 
-第 $i$ 個峰的區段為 $[v_{i-1},\ v_i)$，其中 $v_0 = 0$，$v_m = $ 光譜末端。所有區段剛好不重疊地涵蓋整條光譜。
+第 $`i`$ 個峰的區段為 $`[v_{i-1},\ v_i)`$，其中 $`v_0 = 0`$，$`v_m`$ 為光譜末端。所有區段剛好不重疊地涵蓋整條光譜。
 
 ### 5.5 有效峰（significant peak）
 
 同時滿足下列兩項才是有效峰（`is_sig = True`）：
 
-$$
-\texttt{area\_frac} \ge \texttt{sig\_area\_frac}\ (0.05) \quad\text{且}\quad \texttt{rel\_height} \ge \texttt{sig\_height\_frac}\ (0.2)
-$$
+```math
+\texttt{area\_frac} \ge \texttt{sig\_area\_frac}\ (0.05) \quad\text{and}\quad \texttt{rel\_height} \ge \texttt{sig\_height\_frac}\ (0.2)
+```
 
 不符合的峰稱為 **sidelobe**：次要的穿透帶、窄而尖的突起、振盪造成的小峰都屬於此類。prominence 未達 `prom_frac` 的細小起伏不會被偵測為峰，直接視為背景。
 
@@ -197,14 +197,14 @@ $$
 
 ### 6.1 寬度的高度基準
 
-寬度在高度水平 $L_r$ 處量測，$r$ 為 `rel_height`：
+寬度在高度水平 $`L_r`$ 處量測，$`r`$ 為 `rel_height`：
 
 | `width_ref` | 高度水平 | 搜尋範圍 |
 |---|---|---|
-| `"prominence"`（預設） | $L_r = y_{n,p} - r \cdot P$ | prominence 的左右 base |
-| `"absolute"` | $L_r = y_{n,p} - r \cdot (y_{n,p} - r_0)$，$r_0 = (\texttt{width\_ref\_value} - b)/y_\text{max}$ | 該峰的 valley 區段 |
+| `"prominence"`（預設） | $`L_r = y_{n,p} - r \cdot P`$ | prominence 的左右 base |
+| `"absolute"` | $`L_r = y_{n,p} - r \cdot (y_{n,p} - r_0)`$，其中 $`r_0 = (v_\text{ref} - b)/y_\text{max}`$，$`v_\text{ref}`$ 為 `width_ref_value` | 該峰的 valley 區段 |
 
-從峰頂往左右搜尋，找到 $y_n$ 降到 $L_r$ 的位置，以線性內插求得分數索引 $x_L(r)$、$x_R(r)$。
+從峰頂往左右搜尋，找到 $`y_n`$ 降到 $`L_r`$ 的位置，以線性內插求得分數索引 $`x_L(r)`$、$`x_R(r)`$。
 
 - `prominence` 模式量的是「峰在局部背景之上的寬度」，不受漏光背景和相鄰峰影響。
 - `absolute` 模式（例如基準 0，半高 = T_peak / 2）量的是實際被看到的頻寬。重疊峰可能找不到交點，此時寬度會被截在 valley，並標記 `hm_unresolved = True`。
@@ -213,48 +213,48 @@ $$
 
 | 特徵 | 公式 / 定義 | 用途 |
 |---|---|---|
-| `peak_wl` | 峰頂波長 $\lambda_p$ | 峰位置 |
-| `T_peak` | $T_p(\lambda_p)$ | 峰的絕對穿透率 |
-| `rel_height` | $y_{n,p}$（＝該峰 T ÷ 整條光譜最大 T，基線為 0 時） | 相對強度，判定有效峰 |
-| `prominence` | $P$（正規化單位） | 峰相對局部背景的高度 |
-| `fwhm` | $\left[x_R(0.5) - x_L(0.5)\right]\Delta\lambda$ | 半高全寬 (nm) |
-| `hm_left` / `hm_right` | $\lambda\left(x_L(0.5)\right)$、$\lambda\left(x_R(0.5)\right)$ | 半高交點波長 |
-| `hm_level` | $L_{0.5} \cdot y_\text{max} + b$ | 半高水平（絕對 T），作圖用 |
-| `fw10` | $\left[x_R(0.9) - x_L(0.9)\right]\Delta\lambda$ | 10% 高度處全寬，反映裙擺 |
+| `peak_wl` | 峰頂波長 $`\lambda_p`$ | 峰位置 |
+| `T_peak` | $`T_p(\lambda_p)`$ | 峰的絕對穿透率 |
+| `rel_height` | $`y_{n,p}`$（基線為 0 時＝該峰 T ÷ 整條光譜最大 T） | 相對強度，判定有效峰 |
+| `prominence` | $`P`$（正規化單位） | 峰相對局部背景的高度 |
+| `fwhm` | $`\left[x_R(0.5) - x_L(0.5)\right]\Delta\lambda`$ | 半高全寬 (nm) |
+| `hm_left` / `hm_right` | $`\lambda(x_L(0.5))`$、$`\lambda(x_R(0.5))`$ | 半高交點波長 |
+| `hm_level` | $`L_{0.5} \cdot y_\text{max} + b`$ | 半高水平（絕對 T），作圖用 |
+| `fw10` | $`\left[x_R(0.9) - x_L(0.9)\right]\Delta\lambda`$ | 10% 高度處全寬，反映裙擺 |
 | `fw10_left` / `fw10_right` / `fw10_level` | 10% 高度的交點與水平 | 作圖、漏光排除範圍 |
-| `Q` | $\lambda_p / \text{FWHM}$ | 品質因子，相對頻寬的倒數，跨波長比較窄度 |
-| `shape_factor` | $\text{FW10} / \text{FWHM}$ | 尾巴長度。Gaussian $=\sqrt{\ln 10/\ln 2} \approx 1.82$；Lorentzian $= 3.0$ |
-| `asymmetry` | $\dfrac{\text{hm\_right} - \lambda_p}{\lambda_p - \text{hm\_left}}$ | > 1 右側拖尾，< 1 左側拖尾 |
-| `edge_l` | $\left[x_L(0.1) - x_L(0.9)\right]\Delta\lambda$ | 左緣 10%→90% 過渡寬，越小越陡 |
-| `edge_r` | $\left[x_R(0.9) - x_R(0.1)\right]\Delta\lambda$ | 右緣 90%→10% 過渡寬 |
+| `Q` | $`\lambda_p / \mathrm{FWHM}`$ | 品質因子，相對頻寬的倒數，跨波長比較窄度 |
+| `shape_factor` | $`\mathrm{FW10} / \mathrm{FWHM}`$ | 尾巴長度。Gaussian $`=\sqrt{\ln 10/\ln 2} \approx 1.82`$；Lorentzian $`= 3.0`$ |
+| `asymmetry` | $`(\lambda_R - \lambda_p) / (\lambda_p - \lambda_L)`$，$`\lambda_{L,R}`$ 為半高交點 | > 1 右側拖尾，< 1 左側拖尾 |
+| `edge_l` | $`\left[x_L(0.1) - x_L(0.9)\right]\Delta\lambda`$ | 左緣 10%→90% 過渡寬，越小越陡 |
+| `edge_r` | $`\left[x_R(0.9) - x_R(0.1)\right]\Delta\lambda`$ | 右緣 90%→10% 過渡寬 |
 | `hm_unresolved` | absolute 模式下，區段邊界仍高於半高水平 | 重疊峰在固定基準下無法分開 |
-| `ripple` | $\dfrac{y_{n,p} - \min_{j \in \text{FWHM},\ j\ \text{局部極小}} y_n(j)}{y_{n,p}}$，無局部極小時為 0 | 通帶內凹陷深度 |
+| `ripple` | $`(y_{n,p} - m) / y_{n,p}`$，$`m`$ 為 FWHM 範圍內局部極小的最小值；無局部極小時為 0 | 通帶內凹陷深度 |
 | `n_ripple_peaks` | 被合併的子峰數 | 通帶平整度 |
 | `ripple_wls` | 被合併子峰的波長 list | 作圖 |
-| `area_frac` | $\dfrac{\sum_{j \in [v_{i-1}, v_i)} y_j}{\sum_j y_j}$ | 峰下面積佔比（圖上的 **A**），含區段內的背景 |
-| `fwhm_area_frac` | $\dfrac{\sum_{j=\lceil x_L(0.5)\rceil}^{\lfloor x_R(0.5)\rfloor} y_j}{\sum_j y_j}$ | 半高寬內的能量佔比 |
+| `area_frac` | $`\sum_{j \in [v_{i-1}, v_i)} y_j \ / \ \sum_j y_j`$ | 峰下面積佔比（圖上的 **A**），含區段內的背景 |
+| `fwhm_area_frac` | $`\sum_{j=\lceil x_L(0.5)\rceil}^{\lfloor x_R(0.5)\rfloor} y_j \ / \ \sum_j y_j`$ | 半高寬內的能量佔比 |
 | `seg_lo` / `seg_hi` | 區段兩端波長 | 作圖填色 |
 | `gauss_nrmse` | 見 6.3 | 與 Gaussian 的偏差 |
 | `is_sig` | 見 5.5 | 是否為有效峰 |
-| `n_raw_pts_fwhm` | 原始（內插前）波長點落在 [hm_left, hm_right] 的數量 | 由 `add_sampling_info` 加入；窄峰取樣是否足夠 |
+| `n_raw_pts_fwhm` | 原始（內插前）波長點落在半高交點之間的數量 | 由 `add_sampling_info` 加入；窄峰取樣是否足夠 |
 
 ### 6.3 Gaussian 相似度 `gauss_nrmse`
 
-不做擬合，直接與「同中心、同峰高、同 FWHM」的 Gaussian 比較：
+不做擬合，直接與「同中心、同峰高、同 FWHM」的 Gaussian 比較。設 $`\lambda_L, \lambda_R`$ 為半高交點：
 
-$$
-c = \frac{\text{hm\_left} + \text{hm\_right}}{2}, \qquad B' = y_{n,p} - P, \qquad A = y_{n,p} - B'
-$$
+```math
+c = \frac{\lambda_L + \lambda_R}{2}, \qquad B' = y_{n,p} - P, \qquad A = y_{n,p} - B'
+```
 
-$$
-g(\lambda) = B' + A \exp\left[-4\ln 2 \, \frac{(\lambda - c)^2}{\text{FWHM}^2}\right]
-$$
+```math
+g(\lambda) = B' + A \exp\left[-4\ln 2 \, \frac{(\lambda - c)^2}{\mathrm{FWHM}^2}\right]
+```
 
-$$
-\texttt{gauss\_nrmse} = \frac{1}{A}\sqrt{\frac{1}{N}\sum_{\lambda \in W}\left[y_n(\lambda) - g(\lambda)\right]^2}, \qquad W = [c - 1.5\,\text{FWHM},\ c + 1.5\,\text{FWHM}]
-$$
+```math
+\mathrm{gauss\_nrmse} = \frac{1}{A}\sqrt{\frac{1}{N}\sum_{\lambda \in W}\left[y_n(\lambda) - g(\lambda)\right]^2}, \qquad W = [\,c - 1.5\,\mathrm{FWHM},\ c + 1.5\,\mathrm{FWHM}\,]
+```
 
-absolute 模式時，$P$ 改用 $y_{n,p} - r_0$。
+absolute 模式時，$`P`$ 改用 $`y_{n,p} - r_0`$。
 
 參考值：理想 Gaussian ≈ 0；同 FWHM 的 Lorentzian 約 0.09（在 ±1.5 FWHM 處 Lorentzian 仍有約 10%，Gaussian 已低於 0.3%）；flat-top、不對稱或有 shoulder 的峰會更高。比較視窗內若有相鄰峰，也會使數值上升。
 
@@ -262,30 +262,32 @@ absolute 模式時，$P$ 改用 $y_{n,p} - r_0$。
 
 ## 7. 整體特徵（summary 表）
 
-index 為 ids，每條光譜一列。以下 $\Delta\lambda$ 為波長間隔，band 為 `CFG["band"]`（預設 400–1000 nm）。
+index 為 ids，每條光譜一列。以下 $`\Delta\lambda`$ 為波長間隔，band 為 `CFG["band"]`（預設 400–1000 nm）。
 
 ### 7.1 能量分布
 
+累積能量分布定義為 $`\mathrm{CDF}(\lambda) = \sum_{\lambda' \le \lambda} y \ / \ \sum y`$。
+
 | 特徵 | 公式 / 定義 | 用途 |
 |---|---|---|
-| `valid` | $y_\text{max} > 0$ | 有效光譜 |
-| `baseline` | $b$ | 扣除的基線 |
-| `T_peak` | $\max_\lambda T_p$ | 最大絕對穿透率 |
-| `peak_wl_max` | $\arg\max_\lambda T_p$ | 最高點波長 |
-| `T_mean_band` | band 內 $T_p$ 平均 | 整體穿透水準 |
-| `total_area` | $\sum y \cdot \Delta\lambda$ | 總穿透能量 |
-| `centroid` | $\dfrac{\sum \lambda\, y}{\sum y}$ | 能量重心。不對稱、多峰、背景都會使它偏離峰值波長 |
-| `median_wl` | 累積能量 $\mathrm{CDF}(\lambda) = 0.5$ 的波長，$\mathrm{CDF}(\lambda) = \sum_{\lambda' \le \lambda} y / \sum y$ | 不受極端值影響的中心 |
-| `wl05` / `wl95` | CDF = 0.05 / 0.95 的波長 | 能量分布範圍 |
-| `span90` | $\text{wl95} - \text{wl05}$ | 涵蓋 90% 能量的寬度 |
-| `rms_width` | $\sqrt{\dfrac{\sum (\lambda - \text{centroid})^2 y}{\sum y}}$ | 二階矩寬度，對尾巴與背景敏感 |
-| `skewness` | $\dfrac{\sum (\lambda - \text{centroid})^3 y / \sum y}{\text{rms\_width}^3}$ | 正值往長波長拖，負值往短波長拖 |
-| `eq_width` | $\text{total\_area} / y_\text{max}$ | 等效寬度 (nm)：同峰高的矩形寬度 |
-| `in_band_frac` | $\sum_{\text{band}} y / \sum y$ | band 內能量佔比 |
+| `valid` | $`y_\text{max} > 0`$ | 有效光譜 |
+| `baseline` | $`b`$ | 扣除的基線 |
+| `T_peak` | $`\max_\lambda T_p`$ | 最大絕對穿透率 |
+| `peak_wl_max` | $`\arg\max_\lambda T_p`$ | 最高點波長 |
+| `T_mean_band` | band 內 $`T_p`$ 平均 | 整體穿透水準 |
+| `total_area` | $`\sum y \cdot \Delta\lambda`$ | 總穿透能量 |
+| `centroid` | $`\sum \lambda\, y \ / \ \sum y`$ | 能量重心。不對稱、多峰、背景都會使它偏離峰值波長 |
+| `median_wl` | $`\mathrm{CDF} = 0.5`$ 的波長 | 不受極端值影響的中心 |
+| `wl05` / `wl95` | $`\mathrm{CDF} = 0.05`$ / $`0.95`$ 的波長 | 能量分布範圍 |
+| `span90` | `wl95` − `wl05` | 涵蓋 90% 能量的寬度 |
+| `rms_width` | $`\sigma = \sqrt{\sum (\lambda - \bar\lambda)^2 y \ / \ \sum y}`$，$`\bar\lambda`$ 為 centroid | 二階矩寬度，對尾巴與背景敏感 |
+| `skewness` | $`\left[\sum (\lambda - \bar\lambda)^3 y \ / \ \sum y\right] / \sigma^3`$ | 正值往長波長拖，負值往短波長拖 |
+| `eq_width` | `total_area` $`/\ y_\text{max}`$ | 等效寬度 (nm)：同峰高的矩形寬度 |
+| `in_band_frac` | $`\sum_\text{band} y \ / \ \sum y`$ | band 內能量佔比 |
 | `below_band_frac` / `above_band_frac` | band 以下 / 以上的能量佔比 | band 外浪費的能量 |
-| `n_hm_lobes` | $y_n \ge 0.5$ 的連續區段數 | 半高以上的瓣數 |
-| `hm_cover_nm` | band 內 $y_n \ge 0.5$ 的點數 × $\Delta\lambda$ | 半高以上覆蓋的寬度 |
-| `hm_intervals` | $y_n \ge 0.5$ 的區段 list | 覆蓋位置，用於覆蓋圖 |
+| `n_hm_lobes` | $`y_n \ge 0.5`$ 的連續區段數 | 半高以上的瓣數 |
+| `hm_cover_nm` | band 內 $`y_n \ge 0.5`$ 的點數 × $`\Delta\lambda`$ | 半高以上覆蓋的寬度 |
+| `hm_intervals` | $`y_n \ge 0.5`$ 的區段 list | 覆蓋位置，用於覆蓋圖 |
 
 ### 7.2 峰的彙總
 
@@ -295,7 +297,7 @@ index 為 ids，每條光譜一列。以下 $\Delta\lambda$ 為波長間隔，ba
 |---|---|---|
 | `n_peaks` | ripple 合併後的峰數 | — |
 | `n_sig_peaks` | 有效峰數 | 單純度，判定 `peaks` |
-| `n_sidelobes` | `n_peaks − n_sig_peaks` | 次要峰數 |
+| `n_sidelobes` | `n_peaks` − `n_sig_peaks` | 次要峰數 |
 | `n_shoulders` / `shoulder_wls` | 見 7.4 | 隱藏峰 |
 | `sig_peak_wls` / `sig_fwhms` / `sig_area_fracs` / `sig_T_peaks` | 各有效峰的值（list，依波長排序） | 檢視與 `peak_ranges` 判定 |
 | `main_peak_wl` / `main_fwhm` / `main_area_frac` / `main_Q` | 主峰的對應值 | 主通道特性 |
@@ -306,31 +308,35 @@ index 為 ids，每條光譜一列。以下 $\Delta\lambda$ 為波長間隔，ba
 | `max_ripple` | sig 中最大 ripple | 判定 `ripple` |
 | `max_gauss_nrmse` | sig 中最大 gauss_nrmse | 判定 `gauss` |
 | `n_hm_unresolved` | sig 中 `hm_unresolved` 的個數 | absolute 模式下無法解析的重疊峰 |
-| `core_frac` | $\dfrac{\sum_{\lambda \in \cup_\text{sig}[\text{hm\_left}, \text{hm\_right}]} y}{\sum y}$ | 能量集中在有效峰核心的程度。單一 Gaussian 理論值 $\mathrm{erf}(\sqrt{\ln 2}) \approx 0.76$；Lorentzian 0.5；背景、尾巴越多越低 |
+| `core_frac` | 所有 sig 的 $`[\lambda_L, \lambda_R]`$ 聯集內的 $`\sum y`$，除以 $`\sum y`$ | 能量集中在有效峰核心的程度。單一 Gaussian 理論值 $`\mathrm{erf}(\sqrt{\ln 2}) \approx 0.76`$；Lorentzian 0.5；背景、尾巴越多越低 |
 | `min_peak_sep` | 相鄰有效峰的最小間距 (nm) | 峰距 |
-| `min_resolution` | $\min_i \dfrac{\lambda_{i+1} - \lambda_i}{(\text{FWHM}_i + \text{FWHM}_{i+1})/2}$ | < 1 代表峰重疊、難以分開 |
+| `min_resolution` | $`\min_i \dfrac{\lambda_{i+1} - \lambda_i}{(\mathrm{FWHM}_i + \mathrm{FWHM}_{i+1})/2}`$ | < 1 代表峰重疊、難以分開 |
 | `min_raw_pts_fwhm` | sig 中最小的 `n_raw_pts_fwhm` | 由 `add_sampling_info` 加入，判定 `sampling` |
 
 ### 7.3 漏光與 rejection
 
 **leak-excluded window**：對每個有效峰，排除範圍為
 
-$$
-\left[\ \min\left(\text{fw10\_left},\ \text{hm\_left} - g \cdot \text{FWHM}\right),\ \ \max\left(\text{fw10\_right},\ \text{hm\_right} + g \cdot \text{FWHM}\right)\ \right]
-$$
+```math
+\left[\ \min\left(\lambda_{L,10},\ \lambda_L - g \cdot \mathrm{FWHM}\right),\ \ \max\left(\lambda_{R,10},\ \lambda_R + g \cdot \mathrm{FWHM}\right)\ \right]
+```
 
-其中 $g$ = `leak_guard_fwhm`（預設 1）。保護帶的作用是避免把峰自身的裙擺算成漏光。
+其中 $`\lambda_L, \lambda_R`$ 為半高交點，$`\lambda_{L,10}, \lambda_{R,10}`$ 為 10% 高度交點（`fw10_left` / `fw10_right`），$`g`$ 為 `leak_guard_fwhm`（預設 1）。保護帶的作用是避免把峰自身的裙擺算成漏光。
 
-**阻帶**：band 內、所有排除範圍以外的區域 $S$。
+**阻帶**：band 內、所有排除範圍以外的區域 $`S`$。
 
 | 特徵 | 公式 | 用途 |
 |---|---|---|
 | `leak_excl` | 排除範圍的區段 list | 作圖（底部紅條） |
-| `leak_max_band` | $\max_{\lambda \in S} T_p(\lambda)$ | band 內最嚴重的漏光 |
+| `leak_max_band` | $`\max_{\lambda \in S} T_p(\lambda)`$ | band 內最嚴重的漏光 |
 | `leak_wl` | 上式的波長 | 漏光來源位置 |
-| `leak_mean_band` | $\mathrm{mean}_{\lambda \in S}\, T_p(\lambda)$ | 平均漏光 |
-| `leak_max_oob` | band 外的 $\max T_p$ | band 外的穿透 |
-| `rejection_db` | $10 \log_{10}\left(\dfrac{T_\text{peak}}{\text{leak\_max\_band}}\right)$ | 峰值與最大漏光的對比；$S$ 為空時為 NaN |
+| `leak_mean_band` | $`\mathrm{mean}_{\lambda \in S}\, T_p(\lambda)`$ | 平均漏光 |
+| `leak_max_oob` | band 外的 $`\max T_p`$ | band 外的穿透 |
+| `rejection_db` | 見下式 | 峰值與最大漏光的對比；$`S`$ 為空時為 NaN |
+
+```math
+\mathrm{rejection\_db} = 10 \log_{10}\left(\frac{T_\text{peak}}{\mathrm{leak\_max\_band}}\right)
+```
 
 rejection 與漏光比例的換算：3 dB = 50%，6 dB = 25%，10 dB = 10%，13 dB = 5%，20 dB = 1%。這是相對值；若在乎絕對漏光量，請直接使用 `leak_max_band`。
 
@@ -338,13 +344,15 @@ rejection 與漏光比例的換算：3 dB = 50%，6 dB = 25%，10 dB = 10%，13 
 
 shoulder 是主峰邊緣上的隆起，不是獨立的局部極大，所以 `find_peaks` 抓不到。偵測方式是找「單調邊緣上斜率的凹陷」：
 
-$$
-d_1 = \mathrm{SG}'(y_n;\ \texttt{d1\_window}, 2), \qquad a = \max |d_1|
-$$
+```math
+d_1 = \mathrm{SG}'(y_n;\ w_{d1},\ 2), \qquad a = \max |d_1|
+```
 
-- 上升沿：$d_1$ 的局部極小，prominence ≥ `shoulder_prom`·$a$，且 $d_1 > 0.02a$（斜率仍為正，代表沒有形成獨立的峰）。
-- 下降沿：$d_1$ 的局部極大，prominence ≥ `shoulder_prom`·$a$，且 $d_1 < -0.02a$。
-- 只保留 $y_n > 0.2$ 的位置，並排除距離任何候選峰 2 個點以內的位置。
+$`w_{d1}`$ 為 `d1_window`，$`s`$ 為 `shoulder_prom`。
+
+- 上升沿：$`d_1`$ 的局部極小，prominence ≥ $`s \cdot a`$，且 $`d_1 > 0.02a`$（斜率仍為正，代表沒有形成獨立的峰）。
+- 下降沿：$`d_1`$ 的局部極大，prominence ≥ $`s \cdot a`$，且 $`d_1 < -0.02a`$。
+- 只保留 $`y_n > 0.2`$ 的位置，並排除距離任何候選峰 2 個點以內的位置。
 
 使用一階導數而非二階導數，是為了避免把 flat-top 通帶的兩個圓角誤判為 shoulder。
 
@@ -356,7 +364,7 @@ $$
 
 | 項目 | 通過條件 | 預設值 |
 |---|---|---|
-| `peaks` | $1 \le$ `n_sig_peaks` $\le$ `max_sig_peaks`；設為 `None` 不檢查 | 3 |
+| `peaks` | 1 ≤ `n_sig_peaks` ≤ `max_sig_peaks`；設為 `None` 不檢查 | 3 |
 | `fwhm` | `max_fwhm_sig` ≤ `max_fwhm` | 60 nm |
 | `core` | `core_frac` ≥ `min_core` | 0.5 |
 | `in_band` | `in_band_frac` ≥ `min_in_band` | 0.85 |
@@ -390,31 +398,30 @@ ev = evaluate(summary, crit, peaks)                                # kind="all" 
 
 ### 9.1 覆蓋定義
 
-光譜 $i$ 在波長 $\lambda$（band 內）視為「有覆蓋」的條件：
+光譜 $`i`$ 在波長 $`\lambda`$（band 內）視為「有覆蓋」的條件，其中 $`\ell`$ 為 `level`（預設 0.5，即半高以上），$`T_\text{min}`$ 為 `min_abs_T`：
 
-$$
-C_i(\lambda) = \left[\, y_{n,i}(\lambda) \ge \texttt{level} \,\right] \wedge \left[\, T_{p,i}(\lambda) \ge \texttt{min\_abs\_T} \,\right]
-$$
-
-預設 `level = 0.5`，即半高以上。
+```math
+C_i(\lambda) = \left[\, y_{n,i}(\lambda) \ge \ell \,\right] \wedge \left[\, T_{p,i}(\lambda) \ge T_\text{min} \,\right]
+```
 
 ### 9.2 貪婪挑選
 
-只從 PASS 的候選中挑選。設 $U$ 為目前已覆蓋的波長集合，每一輪計算：
+只從 PASS 的候選中挑選。設 $`U`$ 為目前已覆蓋的波長集合，$`A_i = \{\lambda : C_i(\lambda)\}`$，每一輪計算：
 
-$$
-\text{gain}_i = \left|\{\lambda : C_i(\lambda)\} \setminus U\right|, \qquad \text{over}_i = \left|\{\lambda : C_i(\lambda)\} \cap U\right|
-$$
+```math
+\mathrm{gain}_i = \left| A_i \setminus U \right|, \qquad \mathrm{over}_i = \left| A_i \cap U \right|
+```
 
-$$
-\text{score}_i = \text{gain}_i \cdot q_i - \texttt{overlap\_penalty} \cdot \text{over}_i - 10^{-3} \cdot \text{eq\_width}_i
-$$
+```math
+\mathrm{score}_i = \mathrm{gain}_i \cdot q_i - \alpha \cdot \mathrm{over}_i - 10^{-3} \cdot \mathrm{eq\_width}_i
+```
 
-- $q_i$ 為 `quality` 權重（0–1），預設全部為 1。例如偏好接近 Gaussian 的光譜：`quality = (1 - s["max_gauss_nrmse"] / 0.05).clip(0, 1)`。
-- `gain` < `min_gain_nm` 的候選不列入考慮。
+- $`\alpha`$ 為 `overlap_penalty`（預設 0.5）。
+- $`q_i`$ 為 `quality` 權重（0–1），預設全部為 1。例如偏好接近 Gaussian 的光譜：`quality = (1 - s["max_gauss_nrmse"] / 0.05).clip(0, 1)`。
+- gain < `min_gain_nm` 的候選不列入考慮。
 - 最後一項是同分時偏好較窄光譜的微小調整。
 
-選出 score 最高者後更新 $U$，重複直到 band 完全覆蓋、沒有可選的候選，或達到 `max_n`。
+選出 score 最高者後更新 $`U`$，重複直到 band 完全覆蓋、沒有可選的候選，或達到 `max_n`。
 
 ### 9.3 報告
 
@@ -424,7 +431,7 @@ $$
 | `n_selected` | 選出數 |
 | `coverage` | band 內被覆蓋的比例 |
 | `gaps` | 未覆蓋的區段 list |
-| `flatness` | band 內 $\min \sum_{i \in \text{chosen}} T_{p,i} \,/\, \max \sum_{i \in \text{chosen}} T_{p,i}$，疊加後的平坦度 |
+| `flatness` | 選中光譜的 $`T_p`$ 加總後，band 內最小值 ÷ 最大值（疊加後的平坦度） |
 
 逐輪紀錄（log）包含每次選中的 `id`、有效峰位置、FWHM、T、新覆蓋 nm、重疊 nm、累積覆蓋率。
 
@@ -454,11 +461,11 @@ $$
 峰標籤格式：
 
 ```
-550 nm          ← peak_wl
-FWHM 30.2       ← fwhm
-A 45%  Q 18     ← area_frac、Q
+550 nm              ← peak_wl
+FWHM 30.2           ← fwhm
+A 45%  Q 18         ← area_frac、Q
 edge 8/9  SF 1.84   ← edge_l / edge_r、shape_factor（非 compact 模式）
-ripple 0.12     ← ripple（> 0 時，非 compact 模式）
+ripple 0.12         ← ripple（> 0 時，非 compact 模式）
 ```
 
 右側文字框：有效峰 / sidelobe / shoulder 數、T_peak 與 rejection、core_frac 與 in_band_frac、span90、最大 FWHM 與邊緣寬、band 外最大 T、原始取樣點數（若有）、FDTD 數值警告，以及 PASS（綠底）或 FAIL 與原因（紅底）。
