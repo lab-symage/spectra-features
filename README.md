@@ -24,6 +24,7 @@
 14. [大量資料與效能](#14-大量資料與效能)
 15. [常見問題與注意事項](#15-常見問題與注意事項)
 16. [版本紀錄](#16-版本紀錄)
+17. [術語與縮寫](#17-術語與縮寫)
 
 ---
 
@@ -682,3 +683,100 @@ crit_relaxed = dict(sf.CRIT, max_sig_peaks=4, max_fwhm=80, min_peak_T=0.08,
 - 加入漏光保護帶（`leak_guard_fwhm`）之後，`leak_*` 與 `rejection_db` 的數值與更早的版本不同，通常 rejection 會變高。
 - 舊版 summary 缺少 `gauss_nrmse`、`flat_factor` 等欄位時，使用對應的 crit 條件會報錯並提示重新擷取。`flat_factor` 也可由 `(fw10 − edge_l − edge_r) / fwhm` 補算。
 - 建議存檔時一併記錄當次使用的 `__version__`、CFG 與 CRIT。
+
+---
+
+## 17. 術語與縮寫
+
+### 17.1 程式中的縮寫與命名
+
+| 名稱 | 全稱 / 來源 | 意義 |
+|---|---|---|
+| `CFG` | configuration | 特徵擷取設定（怎麼算特徵）。修改後需重新擷取 |
+| `CRIT` | criteria | 判定條件（怎麼判定 PASS / FAIL）。修改後只需重跑 `evaluate` |
+| `sig` | significant | 有效峰：同時滿足 `area_frac ≥ sig_area_frac` 與 `rel_height ≥ sig_height_frac` 的峰 |
+| sidelobe | — | 偵測到但未達有效峰標準的峰（次要穿透帶、小突起等） |
+| main | — | 主峰：所有峰中 `rel_height` 最高者（不一定是 A 最大者） |
+| `YN` | y normalized | 正規化光譜，最大值為 1 |
+| `TP` | T processed | 處理後的絕對穿透率（平滑、扣基線後再加回基線） |
+| `T_raw` | T raw | 原始穿透率資料 |
+| `wl` / `WL` | wavelength | 波長軸；`WL` 為預設的 350–1100 nm、1 nm 格點 |
+| `wl_raw` | — | 內插前的原始波長（FDTD 監視器的取樣點） |
+| `ids` | identifiers | 每條光譜的識別碼 |
+| `summary` | — | 整體特徵表，每條光譜一列 |
+| `peaks` | — | 逐峰特徵表，每個峰一列 |
+| `evals` / `ev` | evaluations | `evaluate` 的判定結果，含各條件、`pass`、`fail_reasons` |
+| `res` | result | `run_fdtd` / `run_synthetic` 回傳的結果 dict |
+| `rel_height` | relative height | 峰高 ÷ 整條光譜最大值 |
+| `hm` | half maximum | 半高；`hm_left` / `hm_right` 為半高交點 |
+| `fw10` / FW90 | full width at 10% / 90% | 10% / 90% 高度處的全寬 |
+| `SF` | shape factor | 圖上標籤，即 `shape_factor` = FW10 / FWHM（尾巴長度） |
+| `FF` | flat factor | 圖上標籤，即 `flat_factor` = FW90 / FWHM（峰頂平坦度） |
+| `A` | area | 圖上標籤，即 `area_frac`：峰的 valley 區段面積佔比 |
+| `edge` | — | 邊緣寬：10%→90% 高度的過渡寬度，越小越陡 |
+| `core` | — | `core_frac`：有效峰 FWHM 範圍內的能量佔比 |
+| `eq_width` | equivalent width | 等效寬度 = 總面積 ÷ 峰高（同峰高矩形的寬度） |
+| `span90` | — | 涵蓋 90% 能量的波長範圍寬度（`wl95` − `wl05`） |
+| `band` | — | 目標波段，預設 400–1000 nm |
+| `in_band` | — | 目標波段內；`in_band_frac` 為波段內能量佔比 |
+| `oob` | out of band | 目標波段外；`leak_max_oob` 為波段外最大 T |
+| `leak` | — | 漏光：目標波段內、有效峰排除範圍以外的穿透 |
+| `leak_excl` | leak excluded | 計算漏光時排除的範圍（每個有效峰的保護帶） |
+| guard | guard band | 保護帶：半高點外再延伸 `leak_guard_fwhm` × FWHM |
+| valley / segment | — | 相鄰峰之間的最低點 / 以 valley 切分出的區段 |
+| `nrmse` | normalized root-mean-square error | 正規化均方根誤差；`gauss_nrmse` 為與 Gaussian 的偏差 |
+| `unresolved` | — | `hm_unresolved`：absolute 基準下重疊峰找不到半高交點 |
+| `pk<lo>-<hi>` | — | `peak_ranges` 條件在 `fail_reasons` 中的名稱 |
+| dominance | — | `min_main_area_frac` 條件在 `fail_reasons` 中的名稱 |
+| PASS / FAIL | — | 全部條件通過 / 任一條件未通過 |
+| `chosen` | — | 覆蓋篩選選中的光譜（位置索引） |
+| `coverage` | — | 目標波段被選中光譜覆蓋的比例 |
+| `flatness` | — | 選中光譜疊加後，波段內最小值 ÷ 最大值 |
+| `quality` | — | 覆蓋篩選的品質權重（0–1） |
+| `keep_arrays` | — | 是否保留 YN / TP 陣列（大量資料時可關閉省記憶體） |
+| `n_jobs` | number of jobs | 平行處理的核心數，−1 為全部 |
+| `chunk_size` | — | 平行處理時每個工作單位的光譜數 |
+| memmap | memory-mapped array | 以 `np.load(..., mmap_mode="r")` 讀取，不一次載入記憶體 |
+
+### 17.2 光學與濾光片術語
+
+| 術語 | 意義 |
+|---|---|
+| transmittance（穿透率，T） | 穿透光強 ÷ 入射光強，範圍 0–1 |
+| passband（通帶） | 濾光片允許光線通過的波段 |
+| stopband（阻帶） | 濾光片應阻擋光線的波段；本工具中為目標波段內、排除範圍以外的區域 |
+| out-of-band rejection / blocking（帶外抑制） | 擋掉通帶以外光線的能力；本工具以 `rejection_db` 衡量 |
+| dB（分貝） | 10 × log10(比值)；10 dB = 10 倍、20 dB = 100 倍 |
+| OD（optical density，光學密度） | −log10(T)；常用來描述阻帶的絕對穿透率，與本工具的相對 rejection 不同 |
+| FWHM（full width at half maximum） | 半高全寬：峰在一半高度處的寬度 |
+| Q factor（品質因子） | 中心波長 ÷ FWHM；越高代表相對頻寬越窄 |
+| Gaussian（高斯型） | 峰頂圓潤、尾巴快速衰減的鐘形峰；FW10 / FWHM ≈ 1.82 |
+| Lorentzian（勞侖茲型） | 共振型峰形，峰頂尖、尾巴長；FW10 / FWHM = 3.0 |
+| pseudo-Voigt | Gaussian 與 Lorentzian 的加權混合，用來描述介於兩者之間的峰形 |
+| flat-top（平頂） | 峰頂平坦、邊緣陡峭的通帶，常見於多層膜濾光片 |
+| super-Gaussian / super-Lorentzian | 指數大於 2 的廣義峰形，階數越高越接近平頂 |
+| ripple（漣波） | 通帶頂部的起伏或凹陷 |
+| shoulder（肩峰） | 主峰邊緣上的隆起，由被掩蓋的較小峰造成，沒有獨立的峰頂 |
+| sidelobe（旁瓣） | 光學上常指主通帶兩側的干涉振盪；本工具泛指未達有效峰標準的次要峰 |
+| ringing（振鈴） | FDTD 模擬時間不足時，光譜出現的振盪假訊號，可能使 T < 0 |
+| FDTD（finite-difference time-domain） | 時域有限差分法，常用的電磁波模擬方法 |
+| monitor（監視器） | FDTD 中記錄穿透率的位置；其頻率取樣決定原始波長點 |
+| QE（quantum efficiency，量子效率） | 感測器對各波長的響應效率；T × QE 為有效光譜響應 |
+| GMR（guided-mode resonance） | 導模共振，一種共振型濾光機制，峰形常接近 Lorentzian |
+| metasurface（超穎介面） | 次波長結構的平面光學元件，可設計成共振型濾光片 |
+
+### 17.3 演算法與數值方法
+
+| 術語 | 意義 |
+|---|---|
+| prominence（突出度） | scipy 的峰突出度：峰高減去左右兩側最低點中較高者（局部背景） |
+| `find_peaks` / `peak_widths` / `peak_prominences` | scipy.signal 的找峰、量寬度、算突出度函式 |
+| Savitzky–Golay（SG）濾波 | 以局部多項式擬合做平滑或求導數；用於平滑（`sg_window`）與 shoulder 偵測（`d1_window`） |
+| 一階導數（`d1`） | 光譜的斜率；shoulder 表現為單調邊緣上斜率的凹陷 |
+| 線性內插 | 在相鄰取樣點之間以直線估計數值；用於格點統一與交點計算 |
+| CDF（cumulative distribution function） | 累積能量分布；用於 `median_wl`、`wl05`、`wl95` |
+| 能量矩 | `centroid`（一階矩）、`rms_width`（二階矩）、`skewness`（三階矩，偏斜度） |
+| greedy（貪婪法） | 每一步選當下最佳者的近似演算法；用於覆蓋篩選 |
+| set cover（集合覆蓋） | 用最少集合涵蓋全部元素的問題；覆蓋篩選即屬此類 |
+| ILP（integer linear programming） | 整數線性規劃；候選數不多時可求覆蓋問題的最佳解（本工具未內建） |
+| erf（誤差函數） | Gaussian 積分相關函數；單一 Gaussian 的 FWHM 內能量佔比為 erf(√ln2) ≈ 0.76 |
