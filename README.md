@@ -368,6 +368,10 @@ index 為 ids，每條光譜一列。以下 $`\Delta\lambda`$ 為波長間隔，
 | `leak_max_oob` | band 外的 $`\max T_p`$ | band 外的穿透 |
 | `rejection_db` | 見下式 | 峰值與最大漏光的對比；$`S`$ 為空時為 NaN |
 
+**為什麼叫 rejection**：這個詞來自濾光片的術語「out-of-band rejection」（帶外抑制），指濾光片擋掉通帶以外光線的能力。rejection 越高，代表通帶以外漏過去的光越少，濾光片越「乾淨」。業界也常稱為 blocking，或用 OD（光學密度）表示。
+
+程式中的 `rejection_db` 是以峰值和最大漏光的比值來衡量這個能力，用 dB 表示：
+
 ```math
 \mathrm{rejection\_db} = 10 \log_{10}\left(\frac{T_\text{peak}}{\mathrm{leak\_max\_band}}\right)
 ```
