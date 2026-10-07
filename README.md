@@ -2,7 +2,7 @@
 
 本工具從 FDTD 模擬的濾光片穿透率光譜中擷取峰形、漏光、能量分布等特徵，依條件判定 PASS / FAIL，並從候選中挑選一組以單純、窄峰為主、可涵蓋 400–1000 nm 的光譜組合。支援 0.1–1M 條光譜的平行處理，並可把特徵直接標示在 profile 圖上檢查。
 
-**對應程式版本：`spectra_features.__version__ = "2026-10-05.r2"`**
+**對應程式版本：`spectra_features.__version__ = "2026-10-07.r3"`**
 
 ---
 
@@ -36,13 +36,16 @@
 import numpy as np
 import spectra_features as sf
 
-sf.self_check()      # 確認程式完整，應顯示：spectra_features 2026-10-05.r2: OK
+sf.self_check()      # 確認程式完整，應顯示：spectra_features 2026-10-07.r3: OK
 
 # T: (n_samples, 751)，350–1100 nm、1 nm 間隔，數值 0–1
 res = sf.run_fdtd(T)
 
 # 原始格點不同（頻率等間隔、單位 m 或 Hz 等）時，提供原始波長或頻率軸
 res = sf.run_fdtd(T_raw, wl_raw=wl_or_freq)
+
+# 提供設計參數表，並把參數顯示在每張 profile 圖的標題
+res = sf.run_fdtd(T, params=params_df, labels="params")
 
 res["summary"]   # 每條光譜一列的整體特徵
 res["peaks"]     # 每個峰一列的逐峰特徵
@@ -69,6 +72,7 @@ ev = sf.evaluate(res["summary"], crit, res["peaks"])
 | 數值範圍 | 0–1。若為百分比，`from_array` 在最大值 > 1.5 時會自動除以 100 |
 | 波長軸 `wl` | 等間隔、遞增，預設 `WL = np.arange(350, 1101, 1.0)`（751 點） |
 | ids | 每條光譜的識別碼，建議用 `str`，以便與設計參數表對齊 |
+| 設計參數表 `params` | 選填，`pd.DataFrame`，index 為 ids（字串） |
 
 不同來源的資料可用以下函式整理成標準格式：
 
@@ -108,7 +112,7 @@ T_raw ─► from_array / to_uniform_grid ─► T (n_samples, 751)
                              │
                    select_coverage ─► chosen、report（覆蓋率、缺口）
                              │
-          plot_profile / plot_gallery / plot_overview / plot_selection
+          plot_profile / plot_gallery / plot_overview / plot_selection（labels 可加上設計參數）
 ```
 
 單條光譜在 `extract_features` 中的處理順序：
@@ -119,7 +123,7 @@ T_raw ─► from_array / to_uniform_grid ─► T (n_samples, 751)
 4. 計算逐峰寬度、邊緣、峰形、ripple、Gaussian 相似度
 5. 計算通帶、保護帶與漏光、rejection
 6. 偵測 shoulder
-7. 彙總峰相關特徵
+7. 彙總峰相關特徵（含主峰與第二高峰）
 
 ---
 
@@ -192,7 +196,7 @@ P = y_{n,p} - B
 v_i = \arg\min_{p_i \le j \le p_{i+1}} y_n(j)
 ```
 
-第 $`i`$ 個峰的區段為 $`[v_{i-1},\ v_i)`$，其中 $`v_0 = 0`$，$`v_m`$ 為光譜末端。所有區段剛好不重疊地涵蓋整條光譜。
+第 $`i`$ 個峰的區段為 $`[v_{i-1},\ v_i)`$，其中 $`v_0 = 0`$，$`v_m`$ 為光譜末端。所有區段剛好不重疊地涵蓋整條光譜；sidelobe 也有自己的區段。
 
 ### 5.5 有效峰（significant peak）
 
@@ -201,6 +205,8 @@ v_i = \arg\min_{p_i \le j \le p_{i+1}} y_n(j)
 ```math
 \texttt{area\_frac} \ge \texttt{sig\_area\_frac}\ (0.05) \quad\text{and}\quad \texttt{rel\_height} \ge \texttt{sig\_height\_frac}\ (0.2)
 ```
+
+其中 $`\texttt{rel\_height} = y_n(\lambda_p)`$，預設設定下即「峰頂 T ÷ 整條光譜（350–1100 nm）最大 T」。這是**絕對高度**，包含峰底下的背景，不是 prominence。
 
 不符合的峰稱為 **sidelobe**：次要的穿透帶、窄而尖的突起、振盪造成的小峰都屬於此類。prominence 未達 `prom_frac` 的細小起伏不會被偵測為峰，直接視為背景。
 
@@ -232,7 +238,7 @@ v_i = \arg\min_{p_i \le j \le p_{i+1}} y_n(j)
 |---|---|---|
 | `peak_wl` | 峰頂波長 $`\lambda_p`$ | 峰位置 |
 | `T_peak` | $`T_p(\lambda_p)`$ | 峰的絕對穿透率 |
-| `rel_height` | $`y_{n,p}`$（基線為 0 時＝該峰 T ÷ 整條光譜最大 T） | 相對強度，判定有效峰 |
+| `rel_height` | $`y_{n,p}`$（基線為 0 時＝該峰 T ÷ 整條光譜最大 T） | 相對強度，判定有效峰、排序主峰與第二峰 |
 | `prominence` | $`P`$（正規化單位） | 峰相對局部背景的高度 |
 | `fwhm` | $`\left[x_R(0.5) - x_L(0.5)\right]\Delta\lambda`$ | 半高全寬 (nm) |
 | `hm_left` / `hm_right` | $`\lambda(x_L(0.5))`$、$`\lambda(x_R(0.5))`$ | 半高交點波長 |
@@ -246,7 +252,7 @@ v_i = \arg\min_{p_i \le j \le p_{i+1}} y_n(j)
 | `edge_l` | $`\left[x_L(0.1) - x_L(0.9)\right]\Delta\lambda`$ | 左緣 10%→90% 過渡寬，越小越陡 |
 | `edge_r` | $`\left[x_R(0.9) - x_R(0.1)\right]\Delta\lambda`$ | 右緣 90%→10% 過渡寬 |
 | `hm_unresolved` | absolute 模式下，區段邊界仍高於半高水平 | 重疊峰在固定基準下無法分開 |
-| `ripple` | $`(y_{n,p} - m) / y_{n,p}`$，$`m`$ 為 FWHM 範圍內局部極小的最小值；無局部極小時為 0 | 通帶內凹陷深度 |
+| `ripple` | $`(y_{n,p} - m) / y_{n,p}`$，$`m`$ 為兩個半高交點之間所有局部極小中最低者；無局部極小時為 0 | 通帶內凹陷深度；無最小深度門檻，上限約 0.5 |
 | `n_ripple_peaks` | 被合併的子峰數 | 通帶平整度 |
 | `ripple_wls` | 被合併子峰的波長 list | 作圖 |
 | `area_frac` | $`\sum_{j \in [v_{i-1}, v_i)} y_j \ / \ \sum_j y_j`$ | 峰下面積佔比（圖上的 **A**），含區段內的背景 |
@@ -257,6 +263,8 @@ v_i = \arg\min_{p_i \le j \le p_{i+1}} y_n(j)
 | `n_raw_pts_fwhm` | 原始（內插前）波長點落在半高交點之間的數量 | 由 `add_sampling_info` 加入；窄峰取樣是否足夠 |
 
 FW90 可由現有欄位推得：$`\mathrm{FW90} = \mathrm{fw10} - \mathrm{edge\_l} - \mathrm{edge\_r}`$。
+
+`area_frac`（A）的注意事項：區段內的背景漏光也算在內；最左或最右的峰，其區段會一路延伸到 350 或 1100 nm；分母是整個 350–1100 nm 的面積；所有峰（含 sidelobe）的 A 總和為 1。若要排除背景影響，可改看 `fwhm_area_frac` 或 summary 的 `core_frac`。
 
 ### 6.3 Gaussian 相似度 `gauss_nrmse`
 
@@ -290,6 +298,7 @@ absolute 模式時，$`P`$ 改用 $`y_{n,p} - r_0`$。
 - `flat_factor` 只看峰頂：Lorentzian 的峰頂很尖，會通過。
 - 兩者同時設限，才能把峰形限制在接近 Gaussian 的範圍；`gauss_nrmse` 則是綜合指標，也會反映不對稱與 shoulder。
 - 超過 ±1.5 FWHM 的遠端尾巴主要由 `rejection_db` 控制。
+- 參考：`max_shape_factor = 2.1` 約允許 Gaussian 混入 35–40% 的 Lorentzian 成分；`max_flat_factor = 0.5` 約對應 super-Gaussian 階數 2.7。
 
 ---
 
@@ -306,7 +315,7 @@ index 為 ids，每條光譜一列。以下 $`\Delta\lambda`$ 為波長間隔，
 | `valid` | $`y_\text{max} > 0`$ | 有效光譜 |
 | `baseline` | $`b`$ | 扣除的基線 |
 | `T_peak` | $`\max_\lambda T_p`$ | 最大絕對穿透率 |
-| `peak_wl_max` | $`\arg\max_\lambda T_p`$ | 最高點波長 |
+| `peak_wl_max` | $`\arg\max_\lambda T_p`$ | 最高點波長（可能落在光譜端點；排序請用 `main_peak_wl`） |
 | `T_mean_band` | band 內 $`T_p`$ 平均 | 整體穿透水準 |
 | `total_area` | $`\sum y \cdot \Delta\lambda`$ | 總穿透能量 |
 | `centroid` | $`\sum \lambda\, y \ / \ \sum y`$ | 能量重心。不對稱、多峰、背景都會使它偏離峰值波長 |
@@ -320,11 +329,14 @@ index 為 ids，每條光譜一列。以下 $`\Delta\lambda`$ 為波長間隔，
 | `below_band_frac` / `above_band_frac` | band 以下 / 以上的能量佔比 | band 外浪費的能量 |
 | `n_hm_lobes` | $`y_n \ge 0.5`$ 的連續區段數 | 半高以上的瓣數 |
 | `hm_cover_nm` | band 內 $`y_n \ge 0.5`$ 的點數 × $`\Delta\lambda`$ | 半高以上覆蓋的寬度 |
-| `hm_intervals` | $`y_n \ge 0.5`$ 的區段 list | 覆蓋位置，用於覆蓋圖 |
+| `hm_intervals` | $`y_n \ge 0.5`$ 的區段 list | 覆蓋位置，用於覆蓋圖（以整條光譜最大值的一半為基準） |
 
 ### 7.2 峰的彙總
 
-「有效峰」以下簡稱 sig。**main** 為所有峰中 `rel_height` 最高者。
+「有效峰」以下簡稱 sig。
+
+- **main（主峰）**：所有峰中 `rel_height` 最高者（不一定是 A 最大者）。
+- **second（第二高峰）**：主峰以外、**有效峰**中 `rel_height` 最高者；sidelobe 不列入。只有一個有效峰時，second 相關欄位為 NaN。
 
 | 特徵 | 定義 | 用途 |
 |---|---|---|
@@ -333,7 +345,8 @@ index 為 ids，每條光譜一列。以下 $`\Delta\lambda`$ 為波長間隔，
 | `n_sidelobes` | `n_peaks` − `n_sig_peaks` | 次要峰數 |
 | `n_shoulders` / `shoulder_wls` | 見 7.4 | 隱藏峰 |
 | `sig_peak_wls` / `sig_fwhms` / `sig_area_fracs` / `sig_T_peaks` | 各有效峰的值（list，依波長排序） | 檢視與 `peak_ranges` 判定 |
-| `main_peak_wl` / `main_fwhm` / `main_area_frac` / `main_Q` | 主峰的對應值 | 主通道特性 |
+| `main_peak_wl` / `main_fwhm` / `main_area_frac` / `main_Q` | 主峰的對應值 | 主通道特性，判定 `main_peak_range` |
+| `second_peak_wl` / `second_rel_height` / `second_fwhm` / `second_area_frac` | 第二高峰的對應值 | 判定 `second_peak_range` |
 | `main_shape_factor` / `main_flat_factor` / `main_gauss_nrmse` | 主峰的峰形 | 單峰峰形 |
 | `max_fwhm_sig` | sig 中最大 FWHM | 判定 `fwhm` |
 | `max_shape_factor` | sig 中最大 shape_factor | 判定 `shape`（尾巴） |
@@ -355,7 +368,15 @@ index 為 ids，每條光譜一列。以下 $`\Delta\lambda`$ 為波長間隔，
 \left[\ \min\left(\lambda_{L,10},\ \lambda_L - g \cdot \mathrm{FWHM}\right),\ \ \max\left(\lambda_{R,10},\ \lambda_R + g \cdot \mathrm{FWHM}\right)\ \right]
 ```
 
-其中 $`\lambda_L, \lambda_R`$ 為半高交點，$`\lambda_{L,10}, \lambda_{R,10}`$ 為 10% 高度交點（`fw10_left` / `fw10_right`），$`g`$ 為 `leak_guard_fwhm`（預設 1）。保護帶的作用是避免把峰自身的裙擺算成漏光。
+其中 $`\lambda_L, \lambda_R`$ 為半高交點，$`\lambda_{L,10}, \lambda_{R,10}`$ 為 10% 高度交點（`fw10_left` / `fw10_right`），$`g`$ 為 `leak_guard_fwhm`（預設 1）。保護帶的作用是避免把峰自身的裙擺算成漏光。只有有效峰有排除範圍，sidelobe 一定會被算進漏光。
+
+排除範圍的邊界距峰中心 $`(0.5 + g) \cdot \mathrm{FWHM}`$。在邊界處峰本身剩餘的高度：
+
+| $`g`$ | 邊界距峰中心 | Gaussian 剩餘 | Lorentzian 剩餘 |
+|---|---|---|---|
+| 0.5 | 1.0 FWHM | 6.3% | 20% |
+| 1.0（預設） | 1.5 FWHM | 0.2% | 10% |
+| 2.0 | 2.5 FWHM | ≈ 0 | 3.8% |
 
 **阻帶**：band 內、所有排除範圍以外的區域 $`S`$。
 
@@ -392,13 +413,13 @@ $`w_{d1}`$ 為 `d1_window`，$`s`$ 為 `shoulder_prom`。
 - 下降沿：$`d_1`$ 的局部極大，prominence ≥ $`s \cdot a`$，且 $`d_1 < -0.02a`$。
 - 只保留 $`y_n > 0.2`$ 的位置，並排除距離任何候選峰 2 個點以內的位置。
 
-使用一階導數而非二階導數，是為了避免把 flat-top 通帶的兩個圓角誤判為 shoulder。
+使用一階導數而非二階導數，是為了避免把 flat-top 通帶的兩個圓角誤判為 shoulder。程式只輸出 shoulder 的位置（`shoulder_wls`），不會擬合被掩蓋的峰。
 
 ---
 
 ## 8. 判定條件（evaluate）
 
-`evaluate(summary, crit=CRIT, peaks=None)` 逐項檢查，**全部通過才是 PASS**。沒通過的項目以逗號串接在 `fail_reasons`。特徵為 NaN 時，比較結果一律視為不通過。
+`evaluate(summary, crit=CRIT, peaks=None)` 逐項檢查，**全部通過才是 PASS**。沒通過的項目以逗號串接在 `fail_reasons`。特徵為 NaN 時，比較結果一律視為不通過。CRIT 中以 `max_` 開頭的是上限（調大較寬鬆），以 `min_` 開頭的是下限（調大較嚴格）。
 
 | 項目 | 通過條件 | 預設值 |
 |---|---|---|
@@ -413,25 +434,43 @@ $`w_{d1}`$ 為 `d1_window`，$`s`$ 為 `shoulder_prom`。
 | `T_range` | `n_T_gt1` = 0 且 `n_T_neg` = 0 | — |
 | `sampling` | `min_raw_pts_fwhm` ≥ `min_raw_pts_fwhm`；summary 有此欄位才檢查 | 5 |
 | `pk<lo>-<hi>` | `peak_ranges` 中各範圍的峰數條件 | 無 |
+| `main<lo>-<hi>` | `main_peak_wl` 在 `main_peak_range` 內；有設定才檢查 | 無 |
+| `second<lo>-<hi>` | `second_peak_wl` 在 `second_peak_range` 內；有設定才檢查 | 無 |
 | `shape` | `max_shape_factor` ≤ 門檻（尾巴長度）；有設定才檢查 | 無 |
 | `flat` | `max_flat_factor` ≤ 門檻（峰頂平坦度）；有設定才檢查 | 無 |
 | `gauss` | `max_gauss_nrmse` ≤ 門檻；有設定才檢查 | 無 |
 | `dominance` | `main_area_frac` ≥ `min_main_area_frac`；有設定才檢查 | 無 |
 | `invalid` | 無效光譜（全為 0） | — |
 
-峰形條件（`shape`、`flat`、`gauss`、`dominance`）若 summary 缺少對應欄位（例如舊版結果），`evaluate` 會報錯並提示重新擷取，不會默默判為 FAIL 或略過。
+需要特定欄位的條件（`second_peak_range`、`shape`、`flat`、`gauss`、`dominance`），若 summary 缺少對應欄位（例如舊版結果），`evaluate` 會報錯並提示重新擷取，不會默默判為 FAIL 或略過。
 
-### 指定波長範圍的峰數 `peak_ranges`
+### 8.1 指定波長範圍的峰數 `peak_ranges`
 
 ```python
 crit = dict(sf.CRIT, peak_ranges=[
     dict(range=(800, 900), min=1, max=1),                          # 800–900 nm 恰 1 個有效峰
+    dict(range=(700, 900), min=1),                                 # 700–900 nm 至少 1 個（不設上限）
     dict(range=(400, 500), max=0, kind="all", name="no_blue"),     # 400–500 nm 不可有任何峰（含 sidelobe）
 ])
 ev = sf.evaluate(summary, crit, peaks)                             # kind="all" 需傳入 peaks
 ```
 
-計數依據是峰值波長是否落在範圍內，範圍包含兩端點。`count_peaks_in_range(summary, lo, hi)` 可單獨計算各光譜在範圍內的峰數。若只想依範圍判定、不限制全域峰數，設 `max_sig_peaks=None`。
+計數依據是峰值波長是否落在範圍內，範圍包含兩端點；`min` / `max` 省略或設為 `None` 即不檢查。`peak_ranges` 只計算範圍內「有幾個峰」，不管是哪一個峰；全域的 `max_sig_peaks` 仍會檢查，若只想依範圍判定，設 `max_sig_peaks=None`。`count_peaks_in_range(summary, lo, hi)` 可單獨計算各光譜在範圍內的峰數。
+
+### 8.2 主峰與第二高峰的波長範圍
+
+```python
+crit = dict(sf.CRIT,
+    main_peak_range=(600, 700),     # 主峰（最高峰）必須在 600–700 nm
+    second_peak_range=(800, 900),   # 第二高的有效峰必須在 800–900 nm
+    second_peak_required=True,      # True：沒有第二峰 → FAIL；False：有第二峰才檢查範圍
+)
+```
+
+- 主峰與第二高峰都是依**高度**（`rel_height`）排序，不是依面積 A。
+- 兩個範圍可以只設其中一個；設為 `None`（預設）時不檢查。
+- 只有一個有效峰時，`second_peak_wl` 為 NaN：`second_peak_required=True` 判為 FAIL，`False` 視為通過。
+- `fail_reasons` 中的名稱為 `main600-700`、`second800-900`。
 
 ---
 
@@ -478,6 +517,22 @@ C_i(\lambda) = \left[\, y_{n,i}(\lambda) \ge \ell \,\right] \wedge \left[\, T_{p
 
 逐輪紀錄（log）包含每次選中的 `id`、有效峰位置、FWHM、T、新覆蓋 nm、重疊 nm、累積覆蓋率。
 
+### 9.4 自訂條件
+
+需要內建條件以外的篩選時，可在 `evaluate` 之後修改結果；`select_coverage` 與 PDF 匯出都依 `ev["pass"]` 運作：
+
+```python
+def add_check(ev, ok, name):
+    ok = pd.Series(np.asarray(ok, bool), index=ev.index)
+    ev[name] = ok
+    bad = ~ok
+    ev.loc[bad, "fail_reasons"] = (ev.loc[bad, "fail_reasons"] + "," + name).str.lstrip(",")
+    ev["pass"] &= ok
+    return ev
+
+ev = add_check(ev, s["main_area_frac"].between(0.6, 0.9), "mainA0.6-0.9")
+```
+
 ---
 
 ## 10. 視覺化標示說明
@@ -486,6 +541,7 @@ C_i(\lambda) = \left[\, y_{n,i}(\lambda) \ge \ell \,\right] \wedge \left[\, T_{p
 
 | 標示 | 意義 |
 |---|---|
+| 標題 | `id`，或 `id  \|  說明`（使用 `labels` 時，見 10.1） |
 | 黑線 | 處理後的 T（TP） |
 | 灰線 | 原始 T（有提供 T_raw 且有 TP 時才畫） |
 | 彩色填滿 | 有效峰的 valley 區段，數值為 A（`area_frac`） |
@@ -513,19 +569,36 @@ ripple 0.12                  ← ripple（> 0 時，非 compact 模式）
 
 右側文字框：有效峰 / sidelobe / shoulder 數、T_peak 與 rejection、core_frac 與 in_band_frac、span90、最大 FWHM 與邊緣寬、band 外最大 T、原始取樣點數（若有）、FDTD 數值警告，以及 PASS（綠底）或 FAIL 與原因（紅底）。
 
-其他圖：
+### 10.1 標題附加說明 `labels`
 
-- `plot_overview`：左圖為主峰波長對最大 FWHM 的散佈圖（PASS 依有效峰數著色，FAIL 為灰色 ×，選中者紅圈）；右圖為 PASS 候選的半高區段，選中者為紅色。
+`plot_profile`、`plot_gallery`、`run_fdtd` 都有 `labels` 參數（預設 `None`，標題只顯示 id）。指定後，標題顯示為「id  |  說明文字」：
+
+| `labels` 的型別 | 說明文字 | 範例 |
+|---|---|---|
+| `"params"`（僅 `run_fdtd`） | 使用 `params` 表的所有欄位 | `run_fdtd(T, params=params_df, labels="params")` |
+| `pd.DataFrame` | 該 id 那一列，格式 `col=val, col=val` | `labels=params_df[["period", "height"]]` |
+| `pd.Series` / `dict` | id 對應的文字 | `labels={"0": "baseline", "15": "best NIR"}` |
+| 函式 | `f(id, summary_row)` 的回傳值 | `labels=lambda sid, s: f"2nd {s.second_peak_wl:.0f} nm"` |
+
+- 只提供 `params` 而不指定 `labels`，圖上**不會**顯示參數；`params` 仍會用於列印「選中設計的參數」表格。
+- 表格的 index 需對應 ids；`run_fdtd` 的 ids 為字串，程式會自動嘗試字串形式的比對。
+- 浮點數取 4 位有效數字。欄位很多時標題會很長，建議只選幾個重要欄位。
+- `run_synthetic` 的圖會自動以合成類型（例如 `single_gauss`）作為說明。
+
+### 10.2 其他圖
+
+- `plot_overview`：左圖為主峰波長對最大 FWHM 的散佈圖（PASS 依有效峰數著色，FAIL 為灰色 ×，選中者紅圈）；右圖為 PASS 候選的半高區段（`hm_intervals`，以整條光譜最大值的一半為基準，未套用 `min_abs_T`），選中者為紅色。
 - `plot_selection`：選中組合的 T 疊圖、包絡線，未覆蓋的缺口以紅色區塊標示。
 
-匯出 PDF：
+### 10.3 匯出 PDF
 
 ```python
 s, p, ev = res["summary"], res["peaks"], res["evals"]
 TP = res["TP"]; Traw = res["T"] if TP is None else None
 idx = np.flatnonzero(ev["pass"].to_numpy())                       # PASS；改成 ~ev["pass"] 即為 FAIL
 idx = idx[np.argsort(s["main_peak_wl"].to_numpy()[idx])]          # 依主峰波長排序
-sf.plot_gallery(idx[:400], s, p, TP=TP, T_raw=Traw, evals=ev, pdf_path="pass.pdf")
+sf.plot_gallery(idx[:400], s, p, TP=TP, T_raw=Traw, evals=ev, pdf_path="pass.pdf",
+                labels=res["labels"])
 ```
 
 預設每頁 8 條（4 列 × 2 欄）。`run_fdtd` 會自動把 FAIL 光譜隨機抽樣最多 `max_pdf` 條輸出到 `fail_pdf`。
@@ -550,10 +623,10 @@ sf.plot_gallery(idx[:400], s, p, TP=TP, T_raw=Traw, evals=ev, pdf_path="pass.pdf
 | `min_dist_nm` | 3 | 候選峰最小間距 |
 | `merge_frac` | 0.6 | ripple 合併門檻；調小合併較多 |
 | `sig_area_frac` | 0.05 | 有效峰面積佔比門檻 |
-| `sig_height_frac` | 0.2 | 有效峰相對高度門檻 |
+| `sig_height_frac` | 0.2 | 有效峰相對高度門檻（相對整條光譜最大值的絕對高度） |
 | `width_ref` | `"prominence"` | 寬度基準：`"prominence"` / `"absolute"` |
 | `width_ref_value` | 0.0 | absolute 模式的基準 T 值 |
-| `leak_guard_fwhm` | 1.0 | 漏光保護帶寬度（FWHM 倍數） |
+| `leak_guard_fwhm` | 1.0 | 漏光保護帶寬度（FWHM 倍數）；調大較寬鬆 |
 | `band` | (400, 1000) | 目標波段 |
 
 ### 11.2 CRIT（影響判定，修改後只需重跑 evaluate）
@@ -570,6 +643,9 @@ sf.plot_gallery(idx[:400], s, p, TP=TP, T_raw=Traw, evals=ev, pdf_path="pass.pdf
 | `allow_shoulders` | False | 是否允許 shoulder |
 | `min_raw_pts_fwhm` | 5 | 原始取樣點數下限（有 sampling 資訊才檢查） |
 | `peak_ranges` | `[]` | 指定波長範圍的峰數條件 |
+| `main_peak_range` | `None` | 主峰波長範圍，例如 `(600, 700)` |
+| `second_peak_range` | `None` | 第二高有效峰的波長範圍，例如 `(800, 900)` |
+| `second_peak_required` | True | 沒有第二峰時是否判為 FAIL |
 | `max_shape_factor` | （未設定） | 峰形：尾巴長度上限（FW10/FWHM） |
 | `max_flat_factor` | （未設定） | 峰形：峰頂平坦度上限（FW90/FWHM） |
 | `max_gauss_nrmse` | （未設定） | 峰形：Gaussian 偏差上限 |
@@ -588,6 +664,12 @@ crit_g = dict(sf.CRIT, max_sig_peaks=1, max_fwhm=60, min_peak_T=0.08, min_reject
               max_gauss_nrmse=0.05, min_main_area_frac=0.6)
 res = sf.run_fdtd(T, cfg=cfg_g, crit=crit_g, quality="gauss",
                   coverage_kw=dict(level=0.5, min_abs_T=0.05))
+
+# 雙通道：主峰在可見光、第二峰在近紅外（可沒有第二峰）
+crit_dual = dict(sf.CRIT, max_sig_peaks=2, min_peak_T=0.08,
+                 main_peak_range=(600, 700), second_peak_range=(800, 900),
+                 second_peak_required=False)
+res = sf.run_fdtd(T, params=params_df, crit=crit_dual, labels="params")
 
 # 寬鬆條件
 crit_relaxed = dict(sf.CRIT, max_sig_peaks=4, max_fwhm=80, min_peak_T=0.08,
@@ -613,9 +695,9 @@ crit_relaxed = dict(sf.CRIT, max_sig_peaks=4, max_fwhm=80, min_peak_T=0.08,
 | `ringing` | 振盪尾巴（可能 T < 0） | 0.03 |
 | `T_gt1` | T > 1 的數值問題 | 0.02 |
 
-每條光譜都加上 0.01–0.03 的背景與小幅正弦起伏。`meta` 欄位：`type`、`true_n_peaks`、`true_centers`、`true_fwhms`。`synthetic_check(summary, meta)` 回傳各類型的有效峰數分布、shoulder 偵出率，以及單峰類型的中心與 FWHM 誤差。`single_gauss`、`single_lorentz`、`flattop_ripple` 三類可用來校準 `flat_factor` 與 `shape_factor` 的門檻。
+每條光譜都加上 0.01–0.03 的背景與小幅正弦起伏。`meta` 為 DataFrame（index = ids），欄位：`type`、`true_n_peaks`、`true_centers`、`true_fwhms`。`synthetic_check(summary, meta)` 回傳各類型的有效峰數分布、shoulder 偵出率，以及單峰類型的中心與 FWHM 誤差。`single_gauss`、`single_lorentz`、`flattop_ripple` 三類可用來校準 `flat_factor` 與 `shape_factor` 的門檻。
 
-`run_synthetic(n, crit=CRIT)` 可一次執行完整的合成資料測試。
+`run_synthetic(n, crit=CRIT)` 可一次執行完整的合成資料測試；圖標題會顯示合成類型。
 
 ---
 
@@ -623,7 +705,7 @@ crit_relaxed = dict(sf.CRIT, max_sig_peaks=4, max_fwhm=80, min_peak_T=0.08,
 
 | 函式 | 說明 |
 |---|---|
-| `self_check` | 以 200 條合成光譜實際執行一次，確認所有欄位與判定條件存在 |
+| `self_check` | 以 200 條合成光譜實際執行一次，確認欄位、判定條件與 labels 功能存在 |
 | `from_array` | numpy array → 標準格式 |
 | `to_uniform_grid` | 內插到等間隔格點 |
 | `load_csv` / `save_dataset` / `load_dataset` | 檔案存取 |
@@ -635,11 +717,14 @@ crit_relaxed = dict(sf.CRIT, max_sig_peaks=4, max_fwhm=80, min_peak_T=0.08,
 | `count_peaks_in_range` | 計算範圍內峰數 |
 | `evaluate` | 判定 PASS / FAIL |
 | `select_coverage` | 貪婪覆蓋篩選 |
-| `plot_profile` / `plot_gallery` / `plot_overview` / `plot_selection` | 視覺化 |
+| `plot_profile` / `plot_gallery` | 單條 / 多條 profile 圖，支援 `labels` |
+| `plot_overview` / `plot_selection` | 總覽圖 / 選中組合圖 |
 | `make_synthetic` / `synthetic_check` | 合成資料與驗證 |
 | `run_synthetic` / `run_fdtd` | 完整測試流程 |
 
-`run_fdtd` 主要參數：`T_raw`、`wl_raw`、`ids`、`params`、`cfg`、`crit`、`n_jobs`、`chunk_size`、`keep_arrays`、`coverage_kw`、`quality`（`None` / `"gauss"` / Series）、`plots`、`fail_pdf`、`max_pdf`。
+`run_fdtd` 主要參數：`T_raw`、`wl_raw`、`ids`、`params`、`cfg`、`crit`、`n_jobs`、`chunk_size`、`keep_arrays`、`coverage_kw`、`quality`（`None` / `"gauss"` / Series）、`labels`（`None` / `"params"` / DataFrame / Series / dict / 函式）、`plots`、`fail_pdf`、`max_pdf`。回傳的 `res` 包含 `T`、`ids`、`wl_raw`、`summary`、`peaks`、`evals`、`YN`、`TP`、`log`、`report`、`chosen`、`labels`。
+
+`self_check()` 的檢查範圍：peaks / summary 的關鍵欄位、所有判定條件（含 `peak_ranges`、主峰 / 第二峰範圍、峰形條件）、labels 文字產生、`select_coverage` 能否執行。**不檢查**數值準確度（請用 `synthetic_check`）、多核心平行處理、資料匯入函式、`width_ref="absolute"` 模式與作圖函式。
 
 ---
 
@@ -650,6 +735,7 @@ crit_relaxed = dict(sf.CRIT, max_sig_peaks=4, max_fwhm=80, min_peak_T=0.08,
 - **memory-map**：`np.load("T.npy", mmap_mode="r")` 讀入後可直接傳入，不會一次載入記憶體。
 - **結果存檔**：summary 與 peaks 建議存成 parquet。調整 CRIT 時只需重跑 `evaluate`。
 - **估算時間**：先用 1–2 萬條測速，`extract_batch` 結束時會印出每秒處理條數。
+- **PDF 頁數**：每頁 8 條；1 萬條約 1,250 頁。大量資料時請依失敗原因、波段或抽樣分批輸出。
 - **除錯**：多核心時的錯誤訊息較難閱讀，建議先用 `extract_features(T[0])` 或 `n_jobs=1` 測試。
 
 ---
@@ -657,18 +743,30 @@ crit_relaxed = dict(sf.CRIT, max_sig_peaks=4, max_fwhm=80, min_peak_T=0.08,
 ## 15. 常見問題與注意事項
 
 - **確認版本**：更新後執行 `sf.self_check()`，並確認 `sf.__version__`；`run_fdtd` 開頭也會印出版本號。
-- **ids 型別**：`extract_batch(ids=None)` 產生的是整數 0..n−1；`from_array` / `run_fdtd` 產生的是字串 "0", "1", …。要與設計參數表對齊時，兩邊型別必須一致。
+- **ids 型別**：`extract_batch(ids=None)` 產生的是整數 0..n−1；`from_array` / `run_fdtd` 產生的是字串 "0", "1", …。與設計參數表對齊（含 `labels`）時，兩邊型別必須一致。
+- **圖左上角**：顯示的是 id（summary 的 index），不是位置索引；未指定 ids 時兩者看起來相同。
 - **格點**：非 350–1100 nm 的資料必須傳入對應的 `wl`，且後續所有函式都要用同一個 `wl`。
 - **FDTD 頻率取樣**：轉成波長後間隔不均且遞減，必須先用 `to_uniform_grid`。高 Q 峰附近取樣太稀疏時，峰高會被低估、FWHM 被高估，可用 `add_sampling_info` 檢查。
 - **低穿透率的設計**：`min_peak_T` 與 `select_coverage` 的 `min_abs_T` 要依資料分布一起調低，否則覆蓋率會很低。
 - **共振型濾光片**（metasurface、GMR）：峰形接近 Lorentzian，`shape_factor` 約 3、`core_frac` 約 0.5 屬於正常範圍，`min_core`、`min_rejection_db` 需對應放寬。
 - **寬度基準與峰形指標**：`shape_factor`、`flat_factor` 以 prominence 基準量測。若設定 `width_ref="absolute"`，背景漏光會讓 FW10 變寬，`shape_factor` 偏大。
+- **band 外的強峰**：`rel_height` 的分母是整個 350–1100 nm 的最大值；band 外若有很強的峰，band 內的峰相對高度會偏低。
 - **平行處理環境**：在 Windows、macOS 或 Jupyter 中，請將 script 存成模組再 import 使用，主程式放在 `if __name__ == "__main__":` 下。
 - **GitHub 公式顯示**：本文件的區塊公式使用 ```` ```math ````、行內公式使用 `` $`...`$ ``，避免 GitHub 把公式中的 `\_`、`\\` 等當成 Markdown 跳脫字元處理。
 
 ---
 
 ## 16. 版本紀錄
+
+### 2026-10-07.r3
+
+- CRIT 新增 `main_peak_range`、`second_peak_range`、`second_peak_required`，`fail_reasons` 名稱為 `main<lo>-<hi>`、`second<lo>-<hi>`。
+- summary 新增 `second_peak_wl`、`second_rel_height`、`second_fwhm`、`second_area_frac`。
+- `plot_profile`、`plot_gallery`、`run_fdtd` 新增 `labels` 參數，可在圖標題加上設計參數或自訂說明；`run_fdtd` 回傳的 `res` 新增 `labels`。
+- `run_synthetic` 的圖標題自動顯示合成類型。
+- `self_check()` 擴充至主峰 / 第二峰範圍與 labels。
+
+**重要**：`second_peak_wl` 為新欄位，使用 `second_peak_range` 前請以 r3 重新擷取特徵。
 
 ### 2026-10-05.r2
 
@@ -680,12 +778,12 @@ crit_relaxed = dict(sf.CRIT, max_sig_peaks=4, max_fwhm=80, min_peak_T=0.08,
 - `run_fdtd` 新增 `quality` 參數（可設 `"gauss"`）；`run_synthetic` 新增 `crit` 參數。
 - `plot_overview` 支援 `max_sig_peaks=None`。
 
-**重要**：r2 之前的版本中，上列判定條件即使寫在 `crit` 裡也不會生效。使用過這些條件的分析結果請以 r2 重新執行。
+r2 之前的版本中，上列判定條件即使寫在 `crit` 裡也不會生效。使用過這些條件的分析結果請重新執行。
 
 ### 早期版本的行為差異
 
 - 加入漏光保護帶（`leak_guard_fwhm`）之後，`leak_*` 與 `rejection_db` 的數值與更早的版本不同，通常 rejection 會變高。
-- 舊版 summary 缺少 `gauss_nrmse`、`flat_factor` 等欄位時，使用對應的 crit 條件會報錯並提示重新擷取。`flat_factor` 也可由 `(fw10 − edge_l − edge_r) / fwhm` 補算。
+- 舊版 summary 缺少新欄位時，使用對應的 crit 條件會報錯並提示重新擷取。`flat_factor` 也可由 `(fw10 − edge_l − edge_r) / fwhm` 補算。
 - 建議存檔時一併記錄當次使用的 `__version__`、CFG 與 CRIT。
 
 ---
@@ -698,20 +796,24 @@ crit_relaxed = dict(sf.CRIT, max_sig_peaks=4, max_fwhm=80, min_peak_T=0.08,
 |---|---|---|
 | `CFG` | configuration | 特徵擷取設定（怎麼算特徵）。修改後需重新擷取 |
 | `CRIT` | criteria | 判定條件（怎麼判定 PASS / FAIL）。修改後只需重跑 `evaluate` |
-| `sig` | significant | 有效峰：同時滿足 `area_frac ≥ sig_area_frac` 與 `rel_height ≥ sig_height_frac` 的峰 |
+| `sig` | significant | 有效峰：同時滿足 `area_frac ≥ sig_area_frac` 與 `rel_height ≥ sig_height_frac` 的峰；與統計顯著性無關 |
 | sidelobe | — | 偵測到但未達有效峰標準的峰（次要穿透帶、小突起等） |
 | main | — | 主峰：所有峰中 `rel_height` 最高者（不一定是 A 最大者） |
+| second | — | 第二高峰：主峰以外、有效峰中 `rel_height` 最高者 |
 | `YN` | y normalized | 正規化光譜，最大值為 1 |
 | `TP` | T processed | 處理後的絕對穿透率（平滑、扣基線後再加回基線） |
 | `T_raw` | T raw | 原始穿透率資料 |
 | `wl` / `WL` | wavelength | 波長軸；`WL` 為預設的 350–1100 nm、1 nm 格點 |
 | `wl_raw` | — | 內插前的原始波長（FDTD 監視器的取樣點） |
-| `ids` | identifiers | 每條光譜的識別碼 |
+| `ids` | identifiers | 每條光譜的識別碼，即 summary 的 index 與圖標題 |
+| `params` | parameters | 設計參數表（DataFrame，index = ids） |
+| `labels` | — | 圖標題附加說明的來源（見 10.1） |
 | `summary` | — | 整體特徵表，每條光譜一列 |
 | `peaks` | — | 逐峰特徵表，每個峰一列 |
 | `evals` / `ev` | evaluations | `evaluate` 的判定結果，含各條件、`pass`、`fail_reasons` |
 | `res` | result | `run_fdtd` / `run_synthetic` 回傳的結果 dict |
-| `rel_height` | relative height | 峰高 ÷ 整條光譜最大值 |
+| `meta` | metadata | 合成資料的 ground truth（類型、真實峰數、中心、FWHM） |
+| `rel_height` | relative height | 峰高 ÷ 整條光譜最大值（絕對高度，含背景） |
 | `hm` | half maximum | 半高；`hm_left` / `hm_right` 為半高交點 |
 | `fw10` / FW90 | full width at 10% / 90% | 10% / 90% 高度處的全寬 |
 | `SF` | shape factor | 圖上標籤，即 `shape_factor` = FW10 / FWHM（尾巴長度） |
@@ -727,10 +829,13 @@ crit_relaxed = dict(sf.CRIT, max_sig_peaks=4, max_fwhm=80, min_peak_T=0.08,
 | `leak` | — | 漏光：目標波段內、有效峰排除範圍以外的穿透 |
 | `leak_excl` | leak excluded | 計算漏光時排除的範圍（每個有效峰的保護帶） |
 | guard | guard band | 保護帶：半高點外再延伸 `leak_guard_fwhm` × FWHM |
+| `rejection` | out-of-band rejection | 峰值與最大漏光的對比（dB），見 7.3 |
 | valley / segment | — | 相鄰峰之間的最低點 / 以 valley 切分出的區段 |
 | `nrmse` | normalized root-mean-square error | 正規化均方根誤差；`gauss_nrmse` 為與 Gaussian 的偏差 |
 | `unresolved` | — | `hm_unresolved`：absolute 基準下重疊峰找不到半高交點 |
 | `pk<lo>-<hi>` | — | `peak_ranges` 條件在 `fail_reasons` 中的名稱 |
+| `main<lo>-<hi>` | — | `main_peak_range` 條件在 `fail_reasons` 中的名稱 |
+| `second<lo>-<hi>` | — | `second_peak_range` 條件在 `fail_reasons` 中的名稱 |
 | dominance | — | `min_main_area_frac` 條件在 `fail_reasons` 中的名稱 |
 | PASS / FAIL | — | 全部條件通過 / 任一條件未通過 |
 | `chosen` | — | 覆蓋篩選選中的光譜（位置索引） |
