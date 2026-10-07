@@ -8,12 +8,12 @@ FDTD 濾光片穿透率：特徵擷取 + 視覺化檢查 + 400–1000 nm 覆蓋�
   from_array / load_csv / to_uniform_grid / save_dataset / load_dataset
   extract_batch    → summary、peaks、YN、TP（支援多核心平行 + 進度條）
   add_sampling_info→ 原始取樣密度檢查
-  evaluate         → PASS/FAIL 與失敗原因（含 peak_ranges 與峰形條件）
+  evaluate         → PASS/FAIL 與失敗原因（含 peak_ranges、主峰/第二峰範圍、峰形條件）
   select_coverage  → 貪婪挑選覆蓋 400–1000 nm 的組合
   recompute_arrays → 大量資料時只為子集合重算 YN/TP（省記憶體）
   synthetic_check  → 合成資料的偵測正確率
   self_check       → 快速確認本檔所有功能完整（更新後建議先執行）
-  plot_profile / plot_gallery / plot_overview / plot_selection
+  plot_profile / plot_gallery / plot_overview / plot_selection（可用 labels 加上設計參數說明）
 
 ※ 平行處理（n_jobs != 1）在 Windows / macOS 或 Jupyter 中，請把本檔存成模組
   （例如 spectra_features.py）再 import 使用，並把主程式放在 if __name__ == "__main__": 內。
@@ -27,7 +27,7 @@ import numpy as np
 import pandas as pd
 from scipy.signal import find_peaks, peak_widths, peak_prominences, savgol_filter
 
-__version__ = "2026-10-05.r2"
+__version__ = "2026-10-07.r3"
 
 WL = np.arange(350, 1101, 1.0)
 
@@ -65,10 +65,14 @@ CRIT = dict(
     min_raw_pts_fwhm=5,     # 呼叫 add_sampling_info 後才會檢查
     peak_ranges=[],         # 指定波長範圍內的峰數條件（以峰值波長是否落在範圍內計數），例如：
                             #   [dict(range=(800, 900), min=1, max=1)]           800–900 nm 內恰 1 個有效峰
+                            #   [dict(range=(700, 900), min=1)]                  700–900 nm 內至少 1 個（不設上限）
                             #   [dict(range=(400, 500), max=0, name="no_blue")]  400–500 nm 內不可有有效峰
                             # 欄位：range=(lo, hi) 必填；min / max 可省略；
                             #       kind="sig"（有效峰，預設）| "all"（含 sidelobe，需傳入 peaks 表）；
                             #       name：失敗原因名稱（預設 "pk800-900"）
+    main_peak_range=None,   # 主峰（最高峰）波長範圍，例如 (600, 700)；None 不檢查
+    second_peak_range=None, # 第二高有效峰的波長範圍，例如 (800, 900)；None 不檢查
+    second_peak_required=True,  # True：沒有第二峰視為 FAIL；False：有第二峰才檢查範圍
     # 以下峰形條件為選填（設定數值才檢查）：
     #   max_shape_factor  ：有效峰 FW10/FWHM 上限（尾巴長度；Gaussian 1.82、Lorentzian 3.0）
     #   max_flat_factor   ：有效峰 FW90/FWHM 上限（峰頂平坦度；Gaussian 0.39、flat-top ≈ 0.8）
@@ -176,6 +180,44 @@ def _merge_ripples(yn, pk, merge_frac):
             groups.append([p])
     reps = np.array([g[int(np.argmax(yn[g]))] for g in groups])
     return reps, groups
+
+
+def _fmt_val(v):
+    if isinstance(v, (float, np.floating)):
+        return f"{v:.4g}"
+    return str(v)
+
+
+def _label_text(sid, srow, labels):
+    """
+    依 labels 產生圖標題附加說明：
+      None              → 不加
+      pd.DataFrame      → 該 id 那一列，格式 "col=val, col=val"（例如設計參數表）
+      pd.Series / dict  → id → 文字
+      callable          → f(id, summary_row) → 文字
+    """
+    if labels is None:
+        return ""
+    try:
+        if callable(labels) and not isinstance(labels, (pd.DataFrame, pd.Series)):
+            t = labels(sid, srow)
+        elif isinstance(labels, pd.DataFrame):
+            key = sid if sid in labels.index else str(sid)
+            if key not in labels.index:
+                return ""
+            r = labels.loc[key]
+            if isinstance(r, pd.DataFrame):
+                r = r.iloc[0]
+            t = ", ".join(f"{k}={_fmt_val(v)}" for k, v in r.items())
+        elif isinstance(labels, (pd.Series, dict)):
+            t = labels.get(sid, labels.get(str(sid), ""))
+        else:
+            t = ""
+    except Exception:
+        t = ""
+    if t is None or (isinstance(t, float) and np.isnan(t)):
+        return ""
+    return str(t)
 
 
 # ============================================================================
@@ -627,6 +669,16 @@ def extract_features(t_raw, wl=WL, cfg=CFG):
 
     # ---------------- 峰彙總 ----------------
     main = pdf.loc[pdf.rel_height.idxmax()]
+    # 第二高峰：主峰以外、有效峰中 rel_height 最高者
+    others = pdf[pdf.is_sig].drop(index=main.name, errors="ignore").sort_values("rel_height",
+                                                                                ascending=False)
+    if len(others):
+        sec = others.iloc[0]
+        second = dict(second_peak_wl=sec.peak_wl, second_rel_height=sec.rel_height,
+                      second_fwhm=sec.fwhm, second_area_frac=sec.area_frac)
+    else:
+        second = dict(second_peak_wl=np.nan, second_rel_height=np.nan,
+                      second_fwhm=np.nan, second_area_frac=np.nan)
     if len(sig) >= 2:
         sep = np.diff(sig.peak_wl.to_numpy())
         mean_fw = (sig.fwhm.to_numpy()[:-1] + sig.fwhm.to_numpy()[1:]) / 2
@@ -646,6 +698,7 @@ def extract_features(t_raw, wl=WL, cfg=CFG):
         sig_T_peaks=sig.T_peak.round(3).tolist(),
         main_peak_wl=main.peak_wl, main_fwhm=main.fwhm,
         main_area_frac=main.area_frac, main_Q=main.Q,
+        **second,
         max_fwhm_sig=sig.fwhm.max(),
         max_shape_factor=sig.shape_factor.max(),
         max_edge=float(sig[["edge_l", "edge_r"]].to_numpy().max()),
@@ -805,6 +858,12 @@ _SHAPE_CRITERIA = [
 ]
 
 
+def _need(s, colname, key):
+    if colname not in s:
+        raise KeyError(f"summary 缺少欄位 '{colname}'（可能是舊版的擷取結果），"
+                       f"無法檢查 {key}；請以目前版本重新執行 extract_batch / run_fdtd")
+
+
 def evaluate(summary, crit=CRIT, peaks=None):
     crit = {**CRIT, **crit}         # 舊版 crit 缺少的條件以目前預設值補齊
     s = summary
@@ -840,12 +899,25 @@ def evaluate(summary, crit=CRIT, peaks=None):
             ok &= cnt <= r["max"]
         chk[r.get("name") or f"pk{lo:.0f}-{hi:.0f}"] = ok.to_numpy()
 
+    # ---- 主峰 / 第二高峰所在波長範圍 ----
+    rng = crit.get("main_peak_range")
+    if rng is not None:
+        lo, hi = rng
+        chk[f"main{lo:.0f}-{hi:.0f}"] = col("main_peak_wl").between(lo, hi).to_numpy()
+    rng = crit.get("second_peak_range")
+    if rng is not None:
+        _need(s, "second_peak_wl", "second_peak_range")
+        lo, hi = rng
+        v = col("second_peak_wl")
+        ok = v.between(lo, hi)
+        if not crit.get("second_peak_required", True):
+            ok = ok | v.isna()                                   # 沒有第二峰也算通過
+        chk[f"second{lo:.0f}-{hi:.0f}"] = ok.to_numpy()
+
     # ---- 峰形條件（crit 中有給值才檢查）----
     for name, colname, key, op in _SHAPE_CRITERIA:
         if crit.get(key) is not None:
-            if colname not in s:
-                raise KeyError(f"summary 缺少欄位 '{colname}'（可能是舊版的擷取結果），"
-                               f"無法檢查 {key}；請以目前版本重新執行 extract_batch / run_fdtd")
+            _need(s, colname, key)
             v = col(colname)
             chk[name] = ((v <= crit[key]) if op == "<=" else (v >= crit[key])).to_numpy()
 
@@ -948,9 +1020,10 @@ def _legend_handles():
 
 
 def plot_profile(k, summary, peaks, TP=None, T_raw=None, evals=None, wl=WL, cfg=CFG,
-                 ax=None, compact=False):
+                 ax=None, compact=False, labels=None):
     """
     k：位置索引。TP 為 None 時（keep_arrays=False）會由 T_raw 即時重算。
+    labels：標題附加說明（設計參數 DataFrame / id→文字 的 Series 或 dict / 函式 f(id, summary_row)）
     所有特徵標在圖上，右側文字框為整體特徵與 PASS/FAIL。
     """
     import matplotlib.pyplot as plt
@@ -975,7 +1048,8 @@ def plot_profile(k, summary, peaks, TP=None, T_raw=None, evals=None, wl=WL, cfg=
         ax.plot(wl, T_raw[k], color="0.6", lw=0.8, zorder=2)
     ax.plot(wl, t, color="k", lw=1.1, zorder=3)
     ax.set_xlim(wl[0], wl[-1])
-    ax.set_title(str(sid), fontsize=fs + 2, loc="left")
+    extra = _label_text(sid, s, labels)
+    ax.set_title(f"{sid}  |  {extra}" if extra else str(sid), fontsize=fs + 2, loc="left")
     if compact:
         ax.tick_params(labelsize=fs)
     else:
@@ -1064,8 +1138,8 @@ def plot_profile(k, summary, peaks, TP=None, T_raw=None, evals=None, wl=WL, cfg=
 
 
 def plot_gallery(idx, summary, peaks, TP=None, T_raw=None, evals=None, wl=WL, cfg=CFG,
-                 ncols=2, nrows=4, pdf_path=None, progress=True):
-    """多條光譜分頁檢查；給 pdf_path 會輸出多頁 PDF（大量頁數時建議用 PDF）"""
+                 ncols=2, nrows=4, pdf_path=None, progress=True, labels=None):
+    """多條光譜分頁檢查；給 pdf_path 會輸出多頁 PDF。labels 見 plot_profile"""
     import matplotlib.pyplot as plt
     from matplotlib.backends.backend_pdf import PdfPages
     idx = list(idx)
@@ -1076,7 +1150,8 @@ def plot_gallery(idx, summary, peaks, TP=None, T_raw=None, evals=None, wl=WL, cf
             chunk = idx[start:start + per]
             fig, axes = plt.subplots(nrows, ncols, figsize=(9.5 * ncols, 3.3 * nrows), squeeze=False)
             for ax, k in zip(axes.flat, chunk):
-                plot_profile(k, summary, peaks, TP, T_raw, evals, wl, cfg, ax=ax, compact=True)
+                plot_profile(k, summary, peaks, TP, T_raw, evals, wl, cfg, ax=ax, compact=True,
+                             labels=labels)
             for ax in axes.flat[len(chunk):]:
                 ax.axis("off")
             fig.legend(handles=_legend_handles(), loc="lower center", ncol=11, fontsize=7,
@@ -1177,7 +1252,7 @@ def plot_selection(chosen, summary, TP, report, wl=WL, cfg=CFG):
 # ============================================================================
 def self_check(verbose=True):
     """
-    以少量合成資料實際執行一次，確認欄位與判定條件都存在（約 1–2 秒）。
+    以少量合成資料實際執行一次，確認欄位、判定條件與標題說明功能都存在（約 1–2 秒）。
     更新程式後建議先執行：self_check()  → 應顯示 OK
     """
     T, ids, _ = make_synthetic(n=200, seed=1, progress=False)
@@ -1187,18 +1262,24 @@ def self_check(verbose=True):
         if c not in p:
             missing.append(f"peaks.{c}")
     for c in ["max_shape_factor", "max_flat_factor", "max_gauss_nrmse", "main_flat_factor",
-              "leak_excl", "rejection_db", "n_hm_unresolved"]:
+              "second_peak_wl", "second_rel_height", "leak_excl", "rejection_db", "n_hm_unresolved"]:
         if c not in s:
             missing.append(f"summary.{c}")
     crit = dict(CRIT, max_sig_peaks=None, peak_ranges=[dict(range=(400, 600), max=5)],
+                main_peak_range=(400, 1000), second_peak_range=(400, 1000),
+                second_peak_required=False,
                 max_shape_factor=2.2, max_flat_factor=0.5, max_gauss_nrmse=0.05,
                 min_main_area_frac=0.5)
     ev = evaluate(s, crit, p)
-    for c in ["pk400-600", "shape", "flat", "gauss", "dominance", "pass", "fail_reasons"]:
+    for c in ["pk400-600", "main400-1000", "second400-1000", "shape", "flat", "gauss",
+              "dominance", "pass", "fail_reasons"]:
         if c not in ev:
             missing.append(f"evals.{c}")
-    log, rep, chosen = select_coverage(s, YN, TP, evaluate(s), min_abs_T=0.0,
-                                       quality=(1 - s["max_gauss_nrmse"] / 0.05).clip(0, 1))
+    lab = _label_text(ids[0], s.iloc[0], pd.DataFrame({"period": [400.0]}, index=[ids[0]]))
+    if lab != "period=400":
+        missing.append("labels")
+    select_coverage(s, YN, TP, evaluate(s), min_abs_T=0.0,
+                    quality=(1 - s["max_gauss_nrmse"] / 0.05).clip(0, 1))
     ok = not missing
     if verbose:
         print(f"spectra_features {__version__}: " + ("OK" if ok else f"缺少 {missing}"))
@@ -1218,15 +1299,15 @@ def _print_stats(summary, ev):
         print("\n[有效峰數分布]\n",
               summary["n_sig_peaks"].fillna(0).astype(int).value_counts().sort_index())
     print("\n[主要失敗原因]\n", ev.loc[~ev["pass"], "fail_reasons"].value_counts().head(10))
-    cols = [c for c in ["n_sig_peaks", "main_peak_wl", "max_fwhm_sig", "core_frac", "rejection_db",
-                        "in_band_frac", "T_peak", "max_ripple", "max_shape_factor",
+    cols = [c for c in ["n_sig_peaks", "main_peak_wl", "second_peak_wl", "max_fwhm_sig", "core_frac",
+                        "rejection_db", "in_band_frac", "T_peak", "max_ripple", "max_shape_factor",
                         "max_flat_factor", "max_gauss_nrmse", "min_raw_pts_fwhm"] if c in summary]
     print("\n[特徵統計]\n", summary[cols].describe(percentiles=[0.05, 0.5, 0.95]).T.round(3))
 
 
 def run_synthetic(n=20000, seed=0, n_jobs=-1, chunk_size=1000, crit=CRIT, coverage_kw=None,
                   plots=True):
-    """合成資料測試：產生 → 擷取 → 與 ground truth 比對 → 覆蓋篩選 → 作圖"""
+    """合成資料測試：產生 → 擷取 → 與 ground truth 比對 → 覆蓋篩選 → 作圖（標題顯示類型）"""
     T, ids, meta = make_synthetic(n=n, seed=seed)
     summary, peaks, YN, TP = extract_batch(T, ids, n_jobs=n_jobs, chunk_size=chunk_size)
     ev = evaluate(summary, crit, peaks)
@@ -1247,8 +1328,8 @@ def run_synthetic(n=20000, seed=0, n_jobs=-1, chunk_size=1000, crit=CRIT, covera
     if plots:
         types = meta["type"].to_numpy()
         ex = [int(np.flatnonzero(types == t)[0]) for t in pd.unique(types)]   # 每類型各一條
-        plot_profile(ex[0], summary, peaks, TP, evals=ev)
-        plot_gallery(ex, summary, peaks, TP, evals=ev)
+        plot_profile(ex[0], summary, peaks, TP, evals=ev, labels=meta["type"])
+        plot_gallery(ex, summary, peaks, TP, evals=ev, labels=meta["type"])
         plot_overview(summary, ev, chosen, crit=crit)
         if chosen:
             plot_selection(chosen, summary, TP, rep)
@@ -1258,7 +1339,7 @@ def run_synthetic(n=20000, seed=0, n_jobs=-1, chunk_size=1000, crit=CRIT, covera
 
 def run_fdtd(T_raw, wl_raw=None, ids=None, params=None, wl=WL, cfg=CFG, crit=CRIT,
              n_jobs=-1, chunk_size=2000, keep_arrays=None, coverage_kw=None, plots=True,
-             fail_pdf="fdtd_fail_check.pdf", max_pdf=400, seed=0, quality=None):
+             fail_pdf="fdtd_fail_check.pdf", max_pdf=400, seed=0, quality=None, labels=None):
     """
     FDTD 資料測試（輸入 numpy array）：整理格式 → 擷取 → 取樣檢查 → 判定 → 覆蓋篩選 → 作圖
       T_raw / wl_raw / ids：見 from_array
@@ -1266,11 +1347,14 @@ def run_fdtd(T_raw, wl_raw=None, ids=None, params=None, wl=WL, cfg=CFG, crit=CRI
       keep_arrays: None → 20 萬條以下保留 YN/TP，以上改為只對 PASS 候選重算
       fail_pdf   : FAIL 光譜的檢查圖輸出路徑（最多 max_pdf 條，隨機抽樣）；None 不輸出
       quality    : 覆蓋篩選的品質權重；"gauss" → 依 max_gauss_nrmse 自動計算
+      labels     : 圖標題附加說明；"params" → 使用 params 表；或 DataFrame / Series / dict / 函式
     """
     T, ids, wl_s = from_array(T_raw, wl_raw, ids, wl)
     n = len(T)
     if keep_arrays is None:
         keep_arrays = n <= 200_000
+    if isinstance(labels, str) and labels == "params":
+        labels = params
     print(f"[FDTD] spectra_features {__version__} | {n:,} 條光譜 | "
           f"格點 {wl[0]:.0f}–{wl[-1]:.0f} nm, {len(wl)} 點 | keep_arrays={keep_arrays}")
 
@@ -1309,16 +1393,17 @@ def run_fdtd(T_raw, wl_raw=None, ids=None, params=None, wl=WL, cfg=CFG, crit=CRI
         plot_overview(summary, ev, chosen, wl=wl, cfg=cfg, crit=crit)
         if chosen:
             plot_selection(sel_chosen, sel_summary, sel_TP, rep, wl=wl, cfg=cfg)
-            plot_gallery(chosen, summary, peaks, TPp, Traw, ev, wl, cfg)
+            plot_gallery(chosen, summary, peaks, TPp, Traw, ev, wl, cfg, labels=labels)
         fails = np.flatnonzero(~ev["pass"].to_numpy())
         if fail_pdf and len(fails):
             if len(fails) > max_pdf:
                 fails = np.sort(np.random.default_rng(seed).choice(fails, max_pdf, replace=False))
-            plot_gallery(fails, summary, peaks, TPp, Traw, ev, wl, cfg, pdf_path=fail_pdf)
+            plot_gallery(fails, summary, peaks, TPp, Traw, ev, wl, cfg, pdf_path=fail_pdf,
+                         labels=labels)
             print(f"FAIL 檢查圖已輸出：{fail_pdf}（{len(fails)} 條）")
 
     return dict(T=T, ids=ids, wl_raw=wl_s, summary=summary, peaks=peaks, evals=ev,
-                YN=YN, TP=TP, log=log, report=rep, chosen=chosen)
+                YN=YN, TP=TP, log=log, report=rep, chosen=chosen, labels=labels)
 
 
 # ============================================================================
@@ -1384,7 +1469,7 @@ if __name__ == "__main__":
 
     if MODE == "synthetic":
         # ---------------- 合成資料測試 ----------------
-        # 先用 1–2 萬條測速度，再估算 1M 所需時間
+        # 先用 1–2 萬條測速度，再估算 1M 所需時間（圖標題會顯示合成類型）
         res = run_synthetic(n=20000, seed=0, n_jobs=-1, chunk_size=1000)
 
     elif MODE == "fdtd":
@@ -1396,19 +1481,27 @@ if __name__ == "__main__":
         ids_fdtd = None     # 可選：每條光譜的 id（list / ndarray），預設 "0", "1", ...
         params_fdtd = None  # 可選：設計參數 DataFrame（index = ids）
 
+        # 圖標題附加說明（可選），例如：
+        #   LABELS = "params"                                       → 使用 params_fdtd 的所有欄位
+        #   LABELS = params_fdtd[["period", "height"]]              → 只顯示指定欄位
+        #   LABELS = {"0": "baseline design", "15": "best NIR"}     → 指定文字
+        #   LABELS = lambda sid, s: f"main {s.main_peak_wl:.0f} nm" → 自訂函式
+        LABELS = None
+
         if T_fdtd is None:
             raise ValueError("請將 FDTD 穿透率 ndarray 指定給 T_fdtd")
         if params_fdtd is not None:
             params_fdtd.index = params_fdtd.index.astype(str)
 
         crit = dict(CRIT)   # 依需求調整，例如：
-        # crit = dict(CRIT, max_sig_peaks=1, min_peak_T=0.08, min_rejection_db=10,
-        #             max_shape_factor=2.1, max_flat_factor=0.5)
+        # crit = dict(CRIT, max_sig_peaks=2, min_peak_T=0.08, min_rejection_db=10,
+        #             main_peak_range=(600, 700), second_peak_range=(800, 900),
+        #             second_peak_required=False, max_shape_factor=2.1, max_flat_factor=0.5)
         res = run_fdtd(
             T_fdtd, wl_raw=wl_fdtd, ids=ids_fdtd, params=params_fdtd, crit=crit,
             n_jobs=-1, chunk_size=2000,
             coverage_kw=dict(level=0.5, min_abs_T=0.05),
-            fail_pdf="fdtd_fail_check.pdf", max_pdf=400,
+            fail_pdf="fdtd_fail_check.pdf", max_pdf=400, labels=LABELS,
         )
 
         # ---- 匯出 PASS profiles 到 PDF ----
@@ -1432,7 +1525,8 @@ if __name__ == "__main__":
 
             if len(idx):
                 print(f"匯出 {len(idx):,} 條 PASS profiles，約 {int(np.ceil(len(idx) / 8)):,} 頁 → {PASS_PDF}")
-                plot_gallery(idx, s, p, TP=TP, T_raw=Traw, evals=ev, pdf_path=PASS_PDF)
+                plot_gallery(idx, s, p, TP=TP, T_raw=Traw, evals=ev, pdf_path=PASS_PDF,
+                             labels=res["labels"])
             else:
                 print("沒有 PASS 的光譜，未輸出 PDF")
 
